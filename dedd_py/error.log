@@ -1,6 +1,0 @@
-========================================
-Traceback (most recent call last):
-  File "D:\text\dedd_py\dedd\widgets\main_window.py", line 178, in new_project
-    if dlg.exec() != dlg.Accepted:
-                     ^^^^^^^^^^^^
-AttributeError: 'NewProjectDialog' object has no attribute 'Accepted'
