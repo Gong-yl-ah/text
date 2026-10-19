@@ -1,11 +1,10 @@
 @echo off
 chcp 936 >nul
 cd /d "%~dp0"
-set "PYCMD=python"
-where python >nul 2>nul || set "PYCMD=D:\users\anaconda3\envs\dedd\python.exe"
+set "PYCMD=D:\users\anaconda3\envs\dedd\python.exe"
 "%PYCMD%" main.py
 if errorlevel 1 (
     echo.
-    echo Æô¶¯Ê§°Ü£¡Çë¼ì²é Python »·¾³
+    echo å¯åŠ¨å¤±è´¥ï¼è¯·æ£€æŸ¥ Python ç¯å¢ƒ
     pause
 )
