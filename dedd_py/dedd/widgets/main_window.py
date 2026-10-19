@@ -60,15 +60,17 @@ class MainWindow(QMainWindow):
         self.act_open = QAction(C.OPEN, self)
         self.act_save = QAction(C.SAVE, self)
         self.act_import = QAction(C.IMPORT_DEPX, self)
+        self.act_import_photo = QAction(C.IMPORT_PHOTO, self)
         self.act_close = QAction(C.CLOSE, self)
         self.act_exit = QAction(C.EXIT, self)
         for a in (self.act_new, self.act_open, self.act_save, self.act_import,
-                  self.act_close, self.act_exit):
+                  self.act_import_photo, self.act_close, self.act_exit):
             m_file.addAction(a)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.open_project)
         self.act_save.triggered.connect(self.save_project)
         self.act_import.triggered.connect(self.import_depx)
+        self.act_import_photo.triggered.connect(self.import_photo)
         self.act_close.triggered.connect(self.close_project)
         self.act_exit.triggered.connect(self.close)
         self.act_save.setEnabled(False)
@@ -108,7 +110,8 @@ class MainWindow(QMainWindow):
         self.act_face = QAction(C.FACE_ANALYSIS, self)
         self.act_detect = QAction(C.AI_DETECTION, self)
         self.act_export = QAction(C.EXPORT_TO_FILE, self)
-        for a in (self.act_face, self.act_detect, self.act_export):
+        self.act_import_photo_tb = QAction(C.IMPORT_PHOTO, self)
+        for a in (self.act_face, self.act_detect, self.act_export, self.act_import_photo_tb):
             tb.addAction(a)
         tb.addSeparator()
         tb.addAction(self.act_undo)
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         self.act_face.triggered.connect(self.face_analysis)
         self.act_detect.triggered.connect(self.detect_teeth)
         self.act_export.triggered.connect(self.save_design_to_file)
+        self.act_import_photo_tb.triggered.connect(self.import_photo)
 
     def _build_tabs(self):
         central = QWidget(self)
@@ -215,6 +219,29 @@ class MainWindow(QMainWindow):
 
     def import_depx(self):
         self.open_project()
+
+    def import_photo(self):
+        """导入照片：若还没有项目则先自动新建，再选择导入到正面/口内视图"""
+        if self.workspace is None or not self.tabs.isEnabled():
+            dlg = NewProjectDialog(default_dir=os.path.expanduser("~/Documents"), parent=self)
+            if dlg.exec() != dlg.Accepted:
+                return
+            self.basic_info = dlg.basic_info
+            self.proj_file = dlg.save_path
+            self._close_workspace(silent=True)
+            self._new_workspace()
+            self._update_info_bar()
+        box = QMessageBox(self)
+        box.setWindowTitle(C.IMPORT_PHOTO)
+        box.setText("照片导入到哪个视图？")
+        b_front = box.addButton(C.VIEW_FRONT, QMessageBox.AcceptRole)
+        b_base = box.addButton(C.VIEW_BASE, QMessageBox.AcceptRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is None:
+            return
+        panel = self.workspace.front_panel if clicked is b_front else self.workspace.base_panel
+        self._load_photo(panel)
 
     def save_project(self):
         if self.proj_file is None:
