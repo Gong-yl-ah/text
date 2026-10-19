@@ -16,7 +16,7 @@ from typing import List, Optional
 import numpy as np
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..image_utils import np_to_qimage, qimage_bytes, qimage_bytes_to_rgba, rotate90
 from ..models import ToothData
@@ -45,6 +45,13 @@ class WorkPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # 顶部视图标注条（左=正面视图，右=口内视图）
+        self.title_label = QLabel("正面视图" if view_id == VIEW_FRONT else "口内视图", self)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet(
+            "QLabel { background: #2b2b2b; color: #e8e8e8; font-weight: bold; padding: 3px; }")
+        root.addWidget(self.title_label)
+
         self.image_view = ImageView(self)
         root.addWidget(self.image_view, 1)
 
@@ -56,6 +63,12 @@ class WorkPanel(QWidget):
         self.lip_panel.setVisible(False)
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(False)
+
+        # 无图时中央提示：明确告知该导入哪类照片
+        if view_id == VIEW_FRONT:
+            self.image_view.set_hint("请点击『载入照片』按钮或双击本区域\n导入 正面微笑照")
+        else:
+            self.image_view.set_hint("请点击『载入照片』按钮或双击本区域\n导入 口内牙列照")
 
         # 底部按钮条
         self.button_bar = QWidget(self)

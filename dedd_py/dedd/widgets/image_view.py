@@ -12,7 +12,7 @@ from typing import Optional
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 
 from ..image_utils import np_to_qimage
 
@@ -26,6 +26,7 @@ class ImageView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._qimage: Optional[QImage] = None
+        self._hint_text = ""          # 无图时中央提示文字
         self.scale = 1.0          # 图像->视图 比例
         self.offset_x = 0.0       # 图像原点到视图原点偏移
         self.offset_y = 0.0
@@ -33,6 +34,11 @@ class ImageView(QWidget):
         self._auto_fit = True
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
+
+    # ---------- 无图提示 ----------
+    def set_hint(self, text: str):
+        self._hint_text = text or ""
+        self.update()
 
     # ---------- 图像设置 ----------
     def set_image(self, img):
@@ -150,8 +156,19 @@ class ImageView(QWidget):
             rect = self.draw_rect()
             painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
             painter.drawImage(rect, self._qimage)
+        else:
+            self._paint_hint(painter)
         self.paint_overlay(painter)
         painter.end()
+
+    def _paint_hint(self, painter: QPainter):
+        if not self._hint_text:
+            return
+        painter.setPen(QColor(160, 160, 160))
+        f = painter.font()
+        f.setPointSize(11)
+        painter.setFont(f)
+        painter.drawText(self.rect(), Qt.AlignCenter, self._hint_text)
 
     def paint_overlay(self, painter: QPainter):
         """子类覆盖：绘制覆盖层"""
