@@ -62,23 +62,30 @@ class WorkPanel(QWidget):
         bar = QHBoxLayout(self.button_bar)
         bar.setContentsMargins(8, 4, 8, 4)
         bar.addStretch(1)
+        self.btn_load = QPushButton("载入照片", self.button_bar)
         self.btn_rot_left = QPushButton("⟲ 左转90°", self.button_bar)
         self.btn_rot_right = QPushButton("⟳ 右转90°", self.button_bar)
         self.btn_mode_contour = QPushButton("轮廓", self.button_bar)
         self.btn_mode_real = QPushButton("牙冠", self.button_bar)
         self.btn_mode_none = QPushButton("隐藏", self.button_bar)
-        for b in (self.btn_rot_left, self.btn_rot_right, self.btn_mode_contour,
-                  self.btn_mode_real, self.btn_mode_none):
+        for b in (self.btn_load, self.btn_rot_left, self.btn_rot_right,
+                  self.btn_mode_contour, self.btn_mode_real, self.btn_mode_none):
             b.setFixedHeight(26)
             bar.addWidget(b)
         bar.addStretch(1)
         self.button_bar.setVisible(False)
 
+        self.on_load_photo = None
+        self.btn_load.clicked.connect(self._load_clicked)
         self.btn_rot_left.clicked.connect(lambda: self._rotate("left"))
         self.btn_rot_right.clicked.connect(lambda: self._rotate("right"))
         self.btn_mode_contour.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_CONTOUR))
         self.btn_mode_real.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_REAL))
         self.btn_mode_none.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_NONE))
+
+    def _load_clicked(self):
+        if self.on_load_photo:
+            self.on_load_photo(self)
 
     # ---------- 布局 ----------
     def resizeEvent(self, e):
@@ -124,6 +131,7 @@ class WorkPanel(QWidget):
         self.btn_mode_contour.setVisible(False)
         self.btn_mode_real.setVisible(False)
         self.btn_mode_none.setVisible(False)
+        self.btn_load.setVisible(True)
         self.btn_rot_left.setVisible(True)
         self.btn_rot_right.setVisible(True)
         self.update()
@@ -158,6 +166,7 @@ class WorkPanel(QWidget):
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(True)
         self.button_bar.setVisible(True)
+        self.btn_load.setVisible(False)
         self.btn_rot_left.setVisible(False)
         self.btn_rot_right.setVisible(False)
         self.btn_mode_contour.setVisible(True)

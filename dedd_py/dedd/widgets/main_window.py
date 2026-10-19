@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
         # 修改即标记未保存 + 标记快照
         for panel in (self.workspace.base_panel, self.workspace.front_panel):
             panel.image_view.mouseDoubleClickEvent = lambda e, p=panel: self._load_photo(p)
+            panel.on_load_photo = self._load_photo
             panel.mark_panel.on_change = self.workspace._mark_changed
             panel.adjust_panel.on_change = lambda: setattr(self, "dirty", True)
             panel.lip_panel.on_change = lambda: setattr(self, "dirty", True)
@@ -163,7 +164,7 @@ class MainWindow(QMainWindow):
         self.act_face.setEnabled(True)
         self.act_detect.setEnabled(True)
         self.act_export.setEnabled(False)
-        self.statusBar().showMessage("双击图像区域载入照片（左=正面视图，右=口内视图）")
+        self.statusBar().showMessage("点『载入照片』按钮或双击图像区域载入照片（左=正面视图，右=口内视图）")
         self.dirty = False
 
     def new_project(self):
