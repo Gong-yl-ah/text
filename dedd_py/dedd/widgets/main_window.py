@@ -16,9 +16,9 @@ from typing import Optional
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import (QFileDialog, QLabel, QMainWindow, QMessageBox,
-                               QStackedWidget, QTabWidget, QToolBar,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QDialog, QFileDialog, QLabel, QMainWindow,
+                               QMessageBox, QStackedWidget, QTabWidget,
+                               QToolBar, QVBoxLayout, QWidget)
 
 from .. import constants as C
 from ..image_utils import crop, np_to_qimage, qimage_bytes
@@ -175,7 +175,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_save_if_dirty():
             return
         dlg = NewProjectDialog(default_dir=os.path.expanduser("~/Documents"), parent=self)
-        if dlg.exec() != dlg.Accepted:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self.basic_info = dlg.basic_info
         self.proj_file = dlg.save_path
@@ -224,7 +224,7 @@ class MainWindow(QMainWindow):
         """导入照片：若还没有项目则先自动新建，再选择导入到正面/口内视图"""
         if self.workspace is None or not self.tabs.isEnabled():
             dlg = NewProjectDialog(default_dir=os.path.expanduser("~/Documents"), parent=self)
-            if dlg.exec() != dlg.Accepted:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             self.basic_info = dlg.basic_info
             self.proj_file = dlg.save_path
