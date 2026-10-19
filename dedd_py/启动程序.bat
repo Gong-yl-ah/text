@@ -5,6 +5,6 @@ set "PYCMD=D:\users\anaconda3\envs\dedd\python.exe"
 "%PYCMD%" main.py
 if errorlevel 1 (
     echo.
-    echo å¯åŠ¨å¤±è´¥ï¼è¯·æ£€æŸ¥ Python ç¯å¢ƒ
+    echo Æô¶¯Ê§°Ü£¡Çë¼ì²é Python »·¾³
     pause
 )
