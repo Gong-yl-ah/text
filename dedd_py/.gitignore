@@ -1,1 +1,5 @@
-﻿error.log
+﻿__pycache__/
+*.pyc
+error.log
+_smoke_test.deddp
+_demo.deddp
