@@ -1,0 +1,165 @@
+# -*- coding: utf-8 -*-
+"""本地算法 —— 对应原 DEDD 项目的 LocalTeethOptimizer / 网络检测的本地替代
+
+原版"自动优化/对齐"和"人脸分析/AI检测"依赖作者后端服务器，现已不可用。
+这里实现纯本地方案：
+  1. optimize_base  —— 口内视图：按美学比例（宽长比）自动优化牙冠高度
+  2. align_front    —— 正面视图：中切牙中线对齐 + 左右对称化
+  3. detect_face    —— 人脸分析：OpenCV Haar 检测人脸/眼睛，返回旋转角与裁剪框
+"""
+from __future__ import annotations
+
+import math
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+from .models import Rect2D, Tooth
+
+# 前牙美学宽长比参考（切牙区）
+TARGET_RATIO = {
+    11: 0.80, 12: 0.75, 13: 0.70,
+    21: 0.80, 22: 0.75, 23: 0.70,
+}
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def optimize_base(teeth: List[Tooth], image_w: int, image_h: int) -> List[Tooth]:
+    """口内视图自动优化：
+    1) 全部牙齿统一到平均冠长（避免长短不齐）；
+    2) 按牙位目标宽长比调整牙冠高度（保持宽度与位置），宽长比优于目标时不缩小。
+    """
+    if not teeth:
+        return list(teeth)
+    out: List[Tooth] = []
+    lengths = [t.real_length for t in teeth if t.real_length > 0]
+    avg_len = sum(lengths) / len(lengths) if lengths else 0.0
+
+    for t in teeth:
+        r = t.rect.normalized()
+        w = r.width
+        h = r.height
+        if w <= 0 or h <= 0:
+            out.append(t)
+            continue
+        target = TARGET_RATIO.get(t.site, 0.75)
+        # 期望高度 = 宽度 / 目标宽长比
+        ideal_h = w / target
+        # 若当前宽长比已优于目标（更窄长），保持不变；否则修正为理想高度
+        new_h = ideal_h if (w / h) > target else h
+        # 限制在图像内
+        cy = r.cy
+        new_h = min(new_h, image_h * 0.5, h * 1.6)
+        y1 = max(0.0, cy - new_h / 2)
+        y2 = min(float(image_h), cy + new_h / 2)
+        if y2 - y1 < 2:
+            y1, y2 = r.y1, r.y2
+        new_len = avg_len if avg_len > 0 else t.real_length
+        out.append(Tooth(t.site, Rect2D(r.x1, y1, r.x2, y2), new_len))
+    return out
+
+
+def align_front(teeth: List[Tooth], image_w: int, image_h: int) -> List[Tooth]:
+    """正面视图自动对齐：
+    1) 平移：使 11/21 两中切牙中点连线中心对齐到图像水平中线；
+    2) 对称化：12 与 22、13 与 23 相对中线镜像对齐（取双侧平均偏移）；
+    3) 切端对齐：同侧相邻牙切端 y 平滑（简化为中切牙对齐）。
+    """
+    if not teeth:
+        return list(teeth)
+    out = [Tooth(t.site, t.rect.normalized(), t.real_length) for t in teeth]
+
+    def find(site):
+        for t in out:
+            if t.site == site:
+                return t
+        return None
+
+    c11, c21 = find(11), find(21)
+    mid = image_w / 2.0
+    if c11 is not None and c21 is not None:
+        center_x = (c11.rect.cx + c21.rect.cx) / 2.0
+    else:
+        xs = [t.rect.cx for t in out]
+        center_x = sum(xs) / len(xs) if xs else mid
+    dx = mid - center_x
+
+    for t in out:
+        t.rect = Rect2D(t.rect.x1 + dx, t.rect.y1, t.rect.x2 + dx, t.rect.y2)
+
+    # 左右对称化（13-23 / 12-22 相对中线）
+    for l_site, r_site in ((13, 23), (12, 22)):
+        l, r = find(l_site), find(r_site)
+        if l is None or r is None:
+            continue
+        l_d = mid - l.rect.cx
+        r_d = r.rect.cx - mid
+        avg_d = (l_d + r_d) / 2.0
+        wl, wr = l.rect.width, r.rect.width
+        l.rect = Rect2D(mid - avg_d - wl, l.rect.y1, mid - avg_d, l.rect.y2)
+        r.rect = Rect2D(mid + avg_d, r.rect.y1, mid + avg_d + wr, r.rect.y2)
+
+    # 切端(y2)对齐：中切牙切端线取 11/21 均值，侧切牙/尖牙向下略降（微笑曲线）
+    if c11 is not None and c21 is not None:
+        base_y = (c11.rect.y2 + c21.rect.y2) / 2.0
+        for site, drop in ((12, 0.15), (22, 0.15), (13, 0.30), (23, 0.30)):
+            t = find(site)
+            if t is None:
+                continue
+            h = t.rect.height
+            y2 = min(float(image_h), base_y + drop * h)
+            t.rect = Rect2D(t.rect.x1, y2 - h, t.rect.x2, y2)
+    return out
+
+
+def detect_face_and_eyes(image: np.ndarray):
+    """人脸分析（本地替代原网络 API）：
+    使用 OpenCV Haar 级联检测人脸与眼睛，返回：
+      (rotation_deg, crop_box)  或  None（未检测到人脸）
+    rotation_deg > 0 表示需顺时针旋转，使眼线水平。
+    crop_box = (x, y, w, h) 为包含人脸的区域（适当外扩）。
+    """
+    import cv2
+
+    if image is None:
+        return None
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    gray_eq = cv2.equalizeHist(gray)
+
+    face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    eye_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_eye.xml")
+
+    faces = face_cascade.detectMultiScale(gray_eq, 1.1, 5, minSize=(80, 80))
+    if len(faces) == 0:
+        return None
+    # 取最大人脸
+    fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+
+    # 眼睛检测（取两只眼睛，计算连线角度）
+    roi_gray = gray_eq[fy:fy + fh, fx:fx + fw]
+    eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 4, minSize=(20, 20))
+    rotation = 0.0
+    if len(eyes) >= 2:
+        eyes = sorted(eyes, key=lambda e: e[0])
+        ex1, ey1 = eyes[0][0] + eyes[0][2] / 2, eyes[0][1] + eyes[0][3] / 2
+        ex2, ey2 = eyes[-1][0] + eyes[-1][2] / 2, eyes[-1][1] + eyes[-1][3] / 2
+        dx, dy = ex2 - ex1, ey2 - ey1
+        if abs(dx) > 1e-6:
+            rotation = math.degrees(math.atan2(dy, dx))
+
+    # 裁剪框：人脸外扩（与原版一致：四周各扩 1/3）
+    ex = fx - fw // 3
+    ey = fy - fh // 3
+    ew = fw + 2 * (fw // 3)
+    eh = fh + 2 * (fh // 3)
+    h, w = image.shape[:2]
+    ex = _clamp(ex, 0, max(0, w - 1))
+    ey = _clamp(ey, 0, max(0, h - 1))
+    ew = min(ew, w - ex)
+    eh = min(eh, h - ey)
+    return rotation, (ex, ey, ew, eh)
