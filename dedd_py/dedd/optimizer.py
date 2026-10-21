@@ -476,10 +476,12 @@ def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
     import cv2
     if image is None:
         return []
+    if image.ndim == 3 and image.shape[2] == 3:
+        # 输入统一为 OpenCV BGR 惯例（GUI/回归/imread 均为 BGR）
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     small, scale = _downscale_teeth(image)
     h, w = small.shape[:2]
     gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
-    roi = _locate_mouth_roi(gray)
     rois = [_locate_smile_roi(gray), _locate_face_roi(gray),
             (int(w * 0.10), int(h * 0.20), int(w * 0.90), int(h * 0.80))]
     roi, boxes = _try_rois(small, gray, rois, sites, require_upper=True)
@@ -500,6 +502,9 @@ def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
     import cv2
     if image is None:
         return []
+    if image.ndim == 3 and image.shape[2] == 3:
+        # 输入统一为 OpenCV BGR 惯例（GUI/回归/imread 均为 BGR）
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     small, scale = _downscale_teeth(image)
     h, w = small.shape[:2]
     gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)

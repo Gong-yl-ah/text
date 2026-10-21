@@ -3,3 +3,6 @@
 error.log
 _smoke_test.deddp
 _demo.deddp
+# 样本库（患者照片隐私）与回归输出不入库
+样本库/
+_regress_out/
