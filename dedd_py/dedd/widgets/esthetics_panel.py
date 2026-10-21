@@ -82,7 +82,7 @@ class EstheticsDialog(QDialog):
             base = ws.base_panel.get_marked_teeth_data()
             lip = ws.get_lip_points()
 
-            px_per_mm = self._calibrate_mm(base)
+            px_per_mm = _calibrate_mm(base)
             ratio_rows = []
             for t in sorted(front, key=lambda x: x.site):
                 r = crown_width_height_ratio(t)
@@ -156,11 +156,69 @@ class EstheticsDialog(QDialog):
         except Exception:
             pass
 
-    def _calibrate_mm(self, base_teeth) -> Optional[float]:
-        """用口内视图 11/21 的冠长校准像素/毫米：px_per_mm = 框高 / 冠长"""
-        for t in base_teeth:
-            if t.site in (11, 21) and t.length and t.length > 0:
-                h = abs(t.y2 - t.y1)
-                if h > 0:
-                    return h / t.length
-        return None
+def _calibrate_mm(base_teeth) -> Optional[float]:
+    """用口内视图 11/21 的冠长校准像素/毫米：px_per_mm = 框高 / 冠长"""
+    for t in base_teeth:
+        if t.site in (11, 21) and t.length and t.length > 0:
+            h = abs(t.y2 - t.y1)
+            if h > 0:
+                return h / t.length
+    return None
+
+
+def build_esthetics_summary(workspace) -> str:
+    """导出页用的紧凑美学参数标尺 HTML（宽长比 / 宽度比 / 龈缘）"""
+    try:
+        front = workspace.front_panel.get_adjusted_teeth_data()
+        if not front:
+            front = workspace.front_panel.get_marked_teeth_data()
+        base = workspace.base_panel.get_marked_teeth_data()
+
+        dlg = None
+        px_per_mm = _calibrate_mm(base)
+
+        # 宽长比（一行）
+        ratios = []
+        for t in sorted(front, key=lambda x: x.site):
+            r = crown_width_height_ratio(t)
+            st = crown_ratio_status(r)
+            txt = "—" if r is None else f"{r:.2f}"
+            color = _COLOR.get(st, "#888")
+            ratios.append(f"<b>{t.site}</b> {txt} <span style='color:{color}'>({_STATUS_TEXT[st]})</span>")
+        ratio_line = "　".join(ratios) if ratios else "无标记牙位"
+
+        # 宽度比
+        fw = frontal_width_ratios(front)
+        wparts = []
+        for side, tag in (("left", "左13:12:11"), ("right", "右23:22:21")):
+            d = fw.get(side)
+            if not d:
+                wparts.append(f"{tag}: —")
+                continue
+            r = d["ratio"]
+            closer = "黄金分割" if d["closer"] == "golden" else "Preston"
+            dev = d["preston_dev"] if d["closer"] == "preston" else d["golden_dev"]
+            wparts.append(f"{tag}: {r[0]:.2f}:1:{r[2]:.2f}（近{closer}，偏差{dev}%）")
+        width_line = "　".join(wparts)
+
+        # 龈缘
+        ga = gingival_analysis(front, px_per_mm)
+        gparts = []
+        for side, tag in (("left", "左11/12/13"), ("right", "右21/22/23")):
+            d = ga.get(side)
+            if not d:
+                gparts.append(f"{tag}: —")
+                continue
+            mm = "—" if d["diff_mm"] is None else f"{d['diff_mm']:.2f}mm"
+            st = d["verdict"]
+            gparts.append(f"{tag}: {mm} <span style='color:{_COLOR.get(st, '#888')}'>({_STATUS_TEXT[st]})</span>")
+        ging_line = "　".join(gparts)
+
+        calib = "已校准" if px_per_mm else "未校准(需口内冠长)"
+        return (
+            f"<div style='font-size:12px;line-height:1.8;text-align:left;'>"
+            f"<b>② 牙冠宽长比</b>（理想 0.75~0.85）：{ratio_line}<br>"
+            f"<b>③ 正面观宽度比</b>（黄金分割 1.618:1:0.618 / Preston 1.51:1:0.84）：{width_line}<br>"
+            f"<b>④ 龈缘位置</b>（理想 0.5~1.0mm，{calib}）：{ging_line}</div>")
+    except Exception:
+        return "美学参数标尺生成失败"

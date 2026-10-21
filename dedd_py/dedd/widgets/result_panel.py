@@ -98,6 +98,17 @@ class ResultPanel(QScrollArea):
         wrap2.setStyleSheet("QWidget { border: 1px solid #446; }")
         lay.addWidget(wrap2)
 
+        # 美学参数标尺（导出增强：依据期刊文章，随设计图一并输出）
+        est_head = QLabel("美学参数标尺")
+        est_head.setAlignment(Qt.AlignCenter)
+        est_head.setStyleSheet("font-weight: bold; font-size: 14px; margin-top: 6px;")
+        lay.addWidget(est_head)
+        self.est_label = QLabel("")
+        self.est_label.setAlignment(Qt.AlignCenter)
+        self.est_label.setWordWrap(True)
+        self.est_label.setTextFormat(Qt.RichText)
+        lay.addWidget(self.est_label)
+
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         self.save_btn = QPushButton("保存设计图(JPG)")
@@ -149,6 +160,10 @@ class ResultPanel(QScrollArea):
         else:
             self.front_before.set_image(before)
             self.front_after.set_image(after)
+
+    def set_esthetics(self, html: str):
+        """美学参数标尺（宽长比/宽度比/龈缘等，随导出图输出）"""
+        self.est_label.setText(html)
 
 
 def _qimg_to_np(qimg: QImage) -> np.ndarray:

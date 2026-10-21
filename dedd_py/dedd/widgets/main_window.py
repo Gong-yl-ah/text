@@ -444,6 +444,11 @@ class MainWindow(QMainWindow):
         self.result_panel.set_design(base_after, self.workspace.base_panel.get_adjusted_teeth_data())
         self.result_panel.set_compare("base", base_before, base_after)
         self.result_panel.set_compare("front", front_before, front_after)
+        try:
+            from .esthetics_panel import build_esthetics_summary
+            self.result_panel.set_esthetics(build_esthetics_summary(self.workspace))
+        except Exception:
+            self.result_panel.set_esthetics("")
         self.act_export.setEnabled(True)
 
     # ---------- 操作 ----------
@@ -547,11 +552,14 @@ class MainWindow(QMainWindow):
             path += ".jpg"
         try:
             from PIL import Image as PILImage
-            # 渲染结果面板整页
             from PySide6.QtGui import QPixmap
-            pm = QPixmap(self.result_panel.viewport().size())
+            # 渲染结果面板完整内容（含滚动区外部分），避免导出图被截断
+            root = self.result_panel.widget()
+            if root is None:
+                return
+            pm = QPixmap(root.size())
             pm.fill(Qt.white)
-            self.result_panel.viewport().render(pm)
+            root.render(pm)
             img = pm.toImage()
             buf = qimage_bytes(img)
             arr = np.frombuffer(buf, np.uint8).reshape(img.height(), img.width(), 4)
