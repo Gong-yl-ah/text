@@ -18,12 +18,14 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..image_utils import np_to_qimage, qimage_bytes, qimage_bytes_to_rgba, rotate90
+from ..image_utils import (np_to_qimage, qimage_bytes, qimage_bytes_to_rgba,
+                           rotate90, rotate_align_horizontal)
 from ..models import ToothData
 from .adjust_panel import MODE_CONTOUR, MODE_NONE, MODE_REAL, TeethAdjustPanel
 from .image_view import ImageView
 from .lip_panel import LipPanel
 from .mark_panel import TeethMarkPanel
+from .unify_panel import UnifyPanel
 
 VIEW_BASE = 0
 VIEW_FRONT = 1
@@ -60,9 +62,12 @@ class WorkPanel(QWidget):
         self.mark_panel = TeethMarkPanel(self.image_view, self)
         self.adjust_panel = TeethAdjustPanel(self.image_view,
                                              view_kind="front" if view_id == VIEW_FRONT else "base", parent=self)
+        self.unify_panel = UnifyPanel(self.image_view, self)   # 平行合平面（口内视图）
         self.lip_panel.setVisible(False)
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(False)
+        self.unify_panel.setVisible(False)
+        self._unify_orig = None      # 合平面旋转前的原图（用于恢复）
 
         # 中轴线（仅正面视图有效）
         self.sym_axis = None
@@ -85,20 +90,26 @@ class WorkPanel(QWidget):
         self.btn_mode_contour = QPushButton("轮廓", self.button_bar)
         self.btn_mode_real = QPushButton("牙冠", self.button_bar)
         self.btn_mode_none = QPushButton("隐藏", self.button_bar)
+        self.btn_apply_unify = QPushButton("应用旋转", self.button_bar)
+        self.btn_restore_unify = QPushButton("恢复原图", self.button_bar)
         for b in (self.btn_load, self.btn_rot_left, self.btn_rot_right,
-                  self.btn_mode_contour, self.btn_mode_real, self.btn_mode_none):
+                  self.btn_mode_contour, self.btn_mode_real, self.btn_mode_none,
+                  self.btn_apply_unify, self.btn_restore_unify):
             b.setFixedHeight(26)
             bar.addWidget(b)
         bar.addStretch(1)
         self.button_bar.setVisible(False)
 
         self.on_load_photo = None
+        self.on_teeth_cleared = None      # 图像变化导致标记/调整被清除时的回调
         self.btn_load.clicked.connect(self._load_clicked)
         self.btn_rot_left.clicked.connect(lambda: self._rotate("left"))
         self.btn_rot_right.clicked.connect(lambda: self._rotate("right"))
         self.btn_mode_contour.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_CONTOUR))
         self.btn_mode_real.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_REAL))
         self.btn_mode_none.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_NONE))
+        self.btn_apply_unify.clicked.connect(self.apply_unify_rotation)
+        self.btn_restore_unify.clicked.connect(self.restore_unify)
 
     def _load_clicked(self):
         if self.on_load_photo:
@@ -111,7 +122,7 @@ class WorkPanel(QWidget):
 
     def _relayout_overlays(self):
         g = self.image_view.geometry()
-        for w in (self.lip_panel, self.mark_panel, self.adjust_panel):
+        for w in (self.lip_panel, self.mark_panel, self.adjust_panel, self.unify_panel):
             w.setGeometry(g)
         self.button_bar.setGeometry(0, self.height() - 34, self.width(), 34)
 
@@ -169,7 +180,69 @@ class WorkPanel(QWidget):
         self.lip_panel.setVisible(False)
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(False)
-        self.button_bar.setVisible(False)
+        # 合平面仅口内视图使用：进入时记住当前图像以便恢复
+        if self.view_id == VIEW_BASE:
+            self.unify_panel.setVisible(True)
+            if self._unify_orig is None:
+                img = self.image_view.get_image()
+                if img is not None:
+                    self._unify_orig = img.copy()
+        else:
+            self.unify_panel.setVisible(False)
+        self.button_bar.setVisible(True)
+        self.btn_load.setVisible(False)
+        self.btn_rot_left.setVisible(True)
+        self.btn_rot_right.setVisible(True)
+        self.btn_mode_contour.setVisible(False)
+        self.btn_mode_real.setVisible(False)
+        self.btn_mode_none.setVisible(False)
+        self.btn_apply_unify.setVisible(self.view_id == VIEW_BASE)
+        self.btn_restore_unify.setVisible(self.view_id == VIEW_BASE)
+        self.update()
+
+    # ---------- 平行合平面 ----------
+    def apply_unify_rotation(self):
+        """按合平面两点旋转口内图像，使合平面水平；清除因图像变化而失效的标记/调整"""
+        if not self.has_image():
+            return
+        if not self.unify_panel.has_two():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "平行合平面",
+                                    "请先在口内视图沿咬合平面点两个点（左键单击，可拖动/右键删除），再点『应用旋转』。")
+            return
+        p1, p2 = self.unify_panel.get_img_points()
+        arr = self.render_pre_np()
+        if arr is None:
+            return
+        rotated = rotate_align_horizontal(arr, p1, p2)
+        if rotated is None:
+            return
+        if self._unify_orig is None:
+            img = self.image_view.get_image()
+            if img is not None:
+                self._unify_orig = img.copy()
+        self.set_image(np_to_qimage(rotated))
+        self.unify_panel.clear()
+        # 图像已变化：该视图的标记/调整坐标作废，清除并通知
+        if self.mark_panel.rects or self.adjust_panel.items:
+            self.mark_panel.clear()
+            self.adjust_panel.clear()
+            if self.on_teeth_cleared:
+                self.on_teeth_cleared()
+        self.update()
+
+    def restore_unify(self):
+        """恢复合平面旋转前的口内原图"""
+        if self._unify_orig is None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "恢复原图", "当前没有可恢复的原图（尚未执行过旋转）。")
+            return
+        self.set_image(self._unify_orig)
+        self._unify_orig = None
+        self.unify_panel.clear()
+        if self.mark_panel.rects or self.adjust_panel.items:
+            self.mark_panel.clear()
+            self.adjust_panel.clear()
         self.update()
 
     def enter_mark_lip(self):

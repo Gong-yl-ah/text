@@ -46,6 +46,46 @@ def rotate90(image: np.ndarray, direction: str = "right") -> np.ndarray:
     return np.rot90(image, k)
 
 
+def rotate_align_horizontal(image: np.ndarray, p1, p2, bg: int = 0) -> np.ndarray:
+    """按图像坐标两点（如合平面两点）旋转图像，使两点连线变为水平。
+
+    返回扩大画布后的旋转图（背景填充 bg，默认黑）。p1/p2 为 (x, y) 元组。
+    """
+    if image is None:
+        return None
+    import math
+    try:
+        import cv2
+    except Exception:            # 无 OpenCV 时退化为不做处理
+        return image
+    h, w = image.shape[:2]
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    if abs(dx) < 1e-6:
+        return image
+    # 图像坐标系 y 向下：线方向角 = atan2(dy, dx)；OpenCV getRotationMatrix2D
+    # 的角度符号与数学约定相反，直接传该角即可把两点连线旋转到水平（已验证）
+    angle = math.degrees(math.atan2(dy, dx))
+    if abs(angle) < 0.05:
+        return image
+    cx, cy = (p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0
+    mat = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+    cos = abs(mat[0, 0])
+    sin = abs(mat[0, 1])
+    nw = int(h * sin + w * cos)
+    nh = int(h * cos + w * sin)
+    mat[0, 2] += (nw / 2.0) - cx
+    mat[1, 2] += (nh / 2.0) - cy
+    if image.ndim == 2:
+        out = cv2.warpAffine(image, mat, (nw, nh), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT, borderValue=bg)
+    else:
+        out = cv2.warpAffine(image, mat, (nw, nh), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_CONSTANT,
+                             borderValue=(bg, bg, bg) if image.shape[2] == 3 else (bg, bg, bg, 255))
+    return out
+
+
 def crop(image: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> np.ndarray:
     """裁剪并做边界保护"""
     if image is None:

@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         for panel in (self.workspace.base_panel, self.workspace.front_panel):
             panel.image_view.mouseDoubleClickEvent = lambda e, p=panel: self._load_photo(p)
             panel.on_load_photo = self._load_photo
+            panel.on_teeth_cleared = lambda: self._on_teeth_cleared()
             panel.mark_panel.on_change = self.workspace._mark_changed
             panel.adjust_panel.on_change = lambda: setattr(self, "dirty", True)
             panel.lip_panel.on_change = lambda: setattr(self, "dirty", True)
@@ -348,6 +349,12 @@ class MainWindow(QMainWindow):
         self._est_dlg.show()
         self._est_dlg.raise_()
         self._est_dlg.activateWindow()
+
+    def _on_teeth_cleared(self):
+        """合平面旋转等导致图像变化、标记被清除时：记录快照并标记未保存"""
+        if self.workspace:
+            self.workspace.record_mark_snapshot()
+        self.dirty = True
 
     def _close_workspace(self, silent=False):
         while self.stack.count() > 0:
