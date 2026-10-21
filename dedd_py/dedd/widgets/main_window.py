@@ -122,16 +122,21 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         self.act_sym = QAction("中轴线", self)
         self.act_mirror = QAction("镜像复制", self)
+        self.act_esthetics = QAction("美学参数", self)
         tb.addAction(self.act_sym)
         tb.addAction(self.act_mirror)
+        tb.addAction(self.act_esthetics)
         self.act_face.triggered.connect(self.face_analysis)
         self.act_detect.triggered.connect(self.detect_teeth)
         self.act_export.triggered.connect(self.save_design_to_file)
         self.act_import_photo_tb.triggered.connect(self.import_photo)
         self.act_sym.triggered.connect(self.toggle_sym_axis)
         self.act_mirror.triggered.connect(self.mirror_front)
+        self.act_esthetics.triggered.connect(self.open_esthetics_dialog)
         self.act_sym.setEnabled(False)
         self.act_mirror.setEnabled(False)
+        self.act_esthetics.setEnabled(False)
+        self._est_dlg = None
 
     def _build_tabs(self):
         central = QWidget(self)
@@ -178,6 +183,7 @@ class MainWindow(QMainWindow):
         self.act_detect.setEnabled(True)
         self.act_sym.setEnabled(True)
         self.act_mirror.setEnabled(True)
+        self.act_esthetics.setEnabled(True)
         self.act_export.setEnabled(False)
         self.statusBar().showMessage("点『载入照片』按钮或双击图像区域载入照片（左=正面视图，右=口内视图）")
         self.dirty = False
@@ -331,6 +337,18 @@ class MainWindow(QMainWindow):
         cnt = len(merged_m) - len(marked)
         self.statusBar().showMessage(f"镜像复制完成：新增 {cnt} 颗（轴线 x≈{axis:.0f}）")
 
+    def open_esthetics_dialog(self):
+        """打开美学参数分析窗口（非模态，随操作自动刷新）"""
+        if self.workspace is None:
+            return
+        if self._est_dlg is None:
+            from .esthetics_panel import EstheticsDialog
+            self._est_dlg = EstheticsDialog(self.workspace, self)
+        self._est_dlg.refresh()
+        self._est_dlg.show()
+        self._est_dlg.raise_()
+        self._est_dlg.activateWindow()
+
     def _close_workspace(self, silent=False):
         while self.stack.count() > 0:
             w = self.stack.widget(0)
@@ -346,6 +364,7 @@ class MainWindow(QMainWindow):
         self.act_detect.setEnabled(False)
         self.act_sym.setEnabled(False)
         self.act_mirror.setEnabled(False)
+        self.act_esthetics.setEnabled(False)
         self.act_export.setEnabled(False)
         self.act_auto.setEnabled(False)
         self.act_regen.setEnabled(False)
