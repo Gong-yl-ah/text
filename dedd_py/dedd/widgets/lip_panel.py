@@ -273,9 +273,9 @@ class LipPanel(QWidget):
         painter.setFont(f)
         painter.setPen(QColor(40, 40, 40))
         painter.drawText(8, 18, TITLE[self.current])
-        # 另一条线（半透明虚线）
+        # 另一条线（半透明虚线）—— 图像坐标须转视图坐标，否则缩放/平移时偏移
         other = KIND_UPPER if self.current == KIND_LOWER else KIND_LOWER
-        op = [QPointF(x, y) for x, y in self._lines[other]["pts"]]
+        op = [self.image_view.to_view(x, y) for x, y in self._lines[other]["pts"]]
         if len(op) >= 2:
             c = QColor(COLOR[other])
             c.setAlpha(100)
