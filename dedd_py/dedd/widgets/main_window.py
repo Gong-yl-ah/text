@@ -511,43 +511,39 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, C.FACE_ANALYSIS, f"{C.ERROR}: {ex}")
 
     def detect_teeth(self):
-        """AI 检测（本地启发式）：正面视图按嘴部区域生成 6 个牙位框；
-        口内视图提示手动标记（无本地牙齿检测模型）。"""
-        if self.workspace is None or not self.workspace.front_panel.has_image():
-            QMessageBox.information(self, C.AI_DETECTION, C.IMPORT_IMAGE_FIRST)
+        """AI 检测（本地启发式增强）：
+        口内视图：亮度分割 + 牙间谷分牙自动生成 6 个牙位框；
+        正面视图：Haar 嘴部定位 + 亮度分牙自动生成 6 个牙位框。
+        两个视图各自独立检测，已有图则生成；结果需手动微调。"""
+        if self.workspace is None:
             return
-        teeth = self._detect_teeth_front()
-        if not teeth:
-            QMessageBox.information(self, C.AI_DETECTION, C.NO_TOOTH_ERROR)
+        from ..optimizer import detect_teeth_intraoral, detect_teeth_front
+        done = []
+        # 口内视图
+        bp = self.workspace.base_panel
+        if bp.has_image():
+            boxes = detect_teeth_intraoral(bp.render_pre_np())
+            if boxes:
+                bp.set_marked_teeth([ToothData(site=s, x1=a, y1=b, x2=c, y2=d, length=0)
+                                     for s, a, b, c, d in boxes])
+                done.append("口内")
+        # 正面视图
+        fp = self.workspace.front_panel
+        if fp.has_image():
+            boxes = detect_teeth_front(fp.render_pre_np())
+            if boxes:
+                fp.set_marked_teeth([ToothData(site=s, x1=a, y1=b, x2=c, y2=d, length=0)
+                                     for s, a, b, c, d in boxes])
+                done.append("正面")
+        if not done:
+            QMessageBox.information(self, C.AI_DETECTION,
+                                    "未检测到可识别的牙列区域：\n"
+                                    "口内照请拍摄上颌前牙清晰正面照（牙齿亮、对焦准）；\n"
+                                    "正面照请保持露齿微笑。也可以手动标记牙位。")
             return
-        self.workspace.front_panel.set_marked_teeth(teeth)
         self.workspace.record_mark_snapshot()
-        self.statusBar().showMessage("AI检测完成：已按嘴部区域生成牙位框，请手动微调", 4000)
-
-    def _detect_teeth_front(self):
-        try:
-            import cv2
-        except ImportError:
-            return []
-        img = self.workspace.front_panel.render_pre_np()
-        if img is None:
-            return []
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        smile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_smile.xml")
-        smiles = smile.detectMultiScale(gray, 1.7, 18, minSize=(50, 50))
-        if len(smiles) == 0:
-            return []
-        x, y, w, h = max(smiles, key=lambda s: s[2] * s[3])
-        # 在嘴部区域内生成 6 颗前牙框（从左到右：13 12 11 21 22 23）
-        sites = [13, 12, 11, 21, 22, 23]
-        teeth = []
-        tw = w / 6.0
-        th = h * 1.05
-        ty = y + h * 0.05
-        for i, site in enumerate(sites):
-            tx = x + i * tw
-            teeth.append(ToothData(site=site, x1=tx, y1=ty, x2=tx + tw, y2=ty + th, length=0))
-        return teeth
+        self.statusBar().showMessage(
+            f"AI检测完成：{'、'.join(done)}视图已生成牙位框，请手动微调", 4000)
 
     def save_design_to_file(self):
         if self.result_panel is None:
