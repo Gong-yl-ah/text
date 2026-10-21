@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QLineEdit, QWidget
 
 from ..models import Rect2D, Tooth, ToothData
@@ -49,6 +49,8 @@ class TeethMarkPanel(QWidget):
         super().__init__(parent)
         self.image_view = image_view
         self.view_id = 0            # 0=口内(BASE) 1=正面(FRONT)
+        self.is_front = False       # 是否正面视图（正面才显示/拖动中轴线）
+        self.sym_axis = None        # 中轴线图像x坐标（None=不显示）
         self.rects: List[DrawableRect] = []
         self.site_edits: List[NumberEdit] = []
         self.length_edits: List[NumberEdit] = []
@@ -65,6 +67,7 @@ class TeethMarkPanel(QWidget):
         self._p4 = QPointF()
         self._index = -1
         self._hover_cursor = False
+        self._sym_drag = False      # 正在拖动中轴线
 
     # ---------- 数据 ----------
     def clear(self):
@@ -83,6 +86,44 @@ class TeethMarkPanel(QWidget):
             self._add_rect_with_edits(p1.x(), p1.y(), p2.x(), p2.y(),
                                       str(td.site) if td.site else "", str(td.length) if td.length else "")
         self.update()
+
+    # ---------- 中轴线 ----------
+    def set_sym_axis(self, axis_x):
+        """设置中轴线（图像x坐标，None=隐藏）"""
+        self.sym_axis = axis_x
+        self.update()
+
+    def get_sym_axis(self):
+        return self.sym_axis
+
+    def _sym_view_x(self) -> Optional[float]:
+        """中轴线的视图x坐标"""
+        if self.sym_axis is None or not self.image_view.has_image():
+            return None
+        return self.sym_axis * self.image_view.scale + self.image_view.offset_x
+
+    def _hit_sym(self, vx: float) -> bool:
+        """点击是否命中中轴线（±8视图像素）"""
+        sx = self._sym_view_x()
+        return self.is_front and sx is not None and abs(vx - sx) <= 8
+
+    def _draw_sym(self, painter: QPainter):
+        """绘制中轴线（正面视图）"""
+        if not self.is_front or self.sym_axis is None or not self.image_view.has_image():
+            return
+        sx = self._sym_view_x()
+        if sx is None:
+            return
+        pen = QPen(QColor(255, 80, 80), 1.5)
+        pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(int(sx), 0, int(sx), self.height())
+        # 顶部小标签
+        painter.setPen(QColor(255, 200, 200))
+        f = painter.font()
+        f.setPointSize(9)
+        painter.setFont(f)
+        painter.drawText(int(sx) + 3, 12, "中线")
 
     def get_teeth_data(self) -> List[ToothData]:
         result = []
@@ -157,7 +198,14 @@ class TeethMarkPanel(QWidget):
             self.image_view.mousePressEvent(e)
             return
         if e.button() == Qt.LeftButton:
-            self._start = QPointF(e.position())
+            p = QPointF(e.position())
+            # 优先：命中中轴线则进入拖动
+            if self._hit_sym(p.x()):
+                self._sym_drag = True
+                self._start = p
+                super().mousePressEvent(e)
+                return
+            self._start = p
             self._flag = POINT_OUT_RECT
             for i, r in enumerate(self.rects):
                 f = r.get_point_flag(self._start)
@@ -195,8 +243,15 @@ class TeethMarkPanel(QWidget):
         if e.buttons() & Qt.MiddleButton:
             self.image_view.mouseMoveEvent(e)
             return
+        p = QPointF(e.position())
+        if self._sym_drag and (e.buttons() & Qt.LeftButton):
+            # 拖动中轴线：更新图像坐标
+            ip = self.image_view.to_image(p.x(), p.y())
+            self.sym_axis = max(0.0, ip.x())
+            self.update()
+            return
         if self._dragging and (e.buttons() & Qt.LeftButton):
-            tmp = QPointF(e.position())
+            tmp = p
             bdp = self.rects[self._index]
             x1 = y1 = x2 = y2 = 0.0
             s = self._start
@@ -257,12 +312,18 @@ class TeethMarkPanel(QWidget):
         if e.button() == Qt.MiddleButton:
             self.image_view.mouseReleaseEvent(e)
             return
-        if e.button() == Qt.LeftButton and self._dragging:
-            end = QPointF(e.position())
-            if self._start == end and self._flag == POINT_OUT_RECT:
-                self._remove_at(self._index)
-            self._dragging = False
-            self._notify()
+        if e.button() == Qt.LeftButton:
+            if self._sym_drag:
+                self._sym_drag = False
+                self._notify()
+                super().mouseReleaseEvent(e)
+                return
+            if self._dragging:
+                end = QPointF(e.position())
+                if self._start == end and self._flag == POINT_OUT_RECT:
+                    self._remove_at(self._index)
+                self._dragging = False
+                self._notify()
         super().mouseReleaseEvent(e)
 
     def mouseDoubleClickEvent(self, e):
@@ -290,6 +351,7 @@ class TeethMarkPanel(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         for r in self.rects:
             r.draw(painter)
+        self._draw_sym(painter)
         painter.end()
 
     def zoom_sync(self):

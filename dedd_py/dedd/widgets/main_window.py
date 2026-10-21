@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QDialog, QFileDialog, QLabel, QMainWindow,
 
 from .. import constants as C
 from ..image_utils import crop, np_to_qimage, qimage_bytes
-from ..models import BasicInfo, ProjData, ToothData
+from ..models import BasicInfo, ProjData, ToothData, mirror_teeth
 from ..project_io import import_depx, load_project, save_project
 from .new_project_dialog import NewProjectDialog
 from .result_panel import ResultPanel
@@ -119,10 +119,19 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addAction(self.act_auto)
         tb.addAction(self.act_regen)
+        tb.addSeparator()
+        self.act_sym = QAction("中轴线", self)
+        self.act_mirror = QAction("镜像复制", self)
+        tb.addAction(self.act_sym)
+        tb.addAction(self.act_mirror)
         self.act_face.triggered.connect(self.face_analysis)
         self.act_detect.triggered.connect(self.detect_teeth)
         self.act_export.triggered.connect(self.save_design_to_file)
         self.act_import_photo_tb.triggered.connect(self.import_photo)
+        self.act_sym.triggered.connect(self.toggle_sym_axis)
+        self.act_mirror.triggered.connect(self.mirror_front)
+        self.act_sym.setEnabled(False)
+        self.act_mirror.setEnabled(False)
 
     def _build_tabs(self):
         central = QWidget(self)
@@ -167,6 +176,8 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(True)
         self.act_face.setEnabled(True)
         self.act_detect.setEnabled(True)
+        self.act_sym.setEnabled(True)
+        self.act_mirror.setEnabled(True)
         self.act_export.setEnabled(False)
         self.statusBar().showMessage("点『载入照片』按钮或双击图像区域载入照片（左=正面视图，右=口内视图）")
         self.dirty = False
@@ -214,6 +225,7 @@ class MainWindow(QMainWindow):
         if proj.lip_points:
             self.workspace.set_lip_points(proj.lip_points)
             self.workspace.set_lip_closed(proj.lip_closed)
+        self.workspace.set_sym_axis(proj.sym_axis)
         self._update_info_bar()
         self.statusBar().showMessage(f"已打开：{os.path.basename(path)}")
 
@@ -271,7 +283,53 @@ class MainWindow(QMainWindow):
         proj.front.bright, proj.front.yellow = self.workspace.get_bright_yellow(VIEW_FRONT)
         proj.lip_points = self.workspace.get_lip_points()
         proj.lip_closed = self.workspace.get_lip_closed()
+        proj.sym_axis = self.workspace.get_sym_axis()
         return proj
+
+    # ---------- 对称辅助线 ----------
+    def toggle_sym_axis(self):
+        """切换正面视图中轴线显示（未设置时默认放在图像水平中心）"""
+        if self.workspace is None:
+            return
+        cur = self.workspace.get_sym_axis()
+        if cur is not None:
+            self.workspace.set_sym_axis(None)
+            self.statusBar().showMessage("中轴线已隐藏")
+        else:
+            img = self.workspace.front_panel.get_image()
+            w = img.width() if img is not None else 500
+            self.workspace.set_sym_axis(w / 2.0)
+            self.statusBar().showMessage(
+                "中轴线已显示（红色虚线）：在『标记牙位』或『美学设计』视图上可直接左右拖动，对准面部/牙列中线")
+        self.dirty = True
+
+    def mirror_front(self):
+        """一键镜像复制：把正面视图已标记/调整的牙齿按中轴线对称复制到对侧（11↔21 等）"""
+        if self.workspace is None:
+            return
+        axis = self.workspace.get_sym_axis()
+        if axis is None:
+            QMessageBox.information(
+                self, "镜像复制",
+                "请先点击工具栏『中轴线』按钮，把红色中线对准面部/牙列中线，再执行镜像复制。")
+            return
+        marked = self.workspace.get_marked_teeth_data(VIEW_FRONT)
+        adjusted = self.workspace.get_adjusted_teeth_data(VIEW_FRONT)
+        if not marked and not adjusted:
+            QMessageBox.information(
+                self, "镜像复制",
+                "正面视图还没有标记牙位。请先在『标记牙位』步骤标记一侧牙齿（如 11/12/13），再执行镜像复制。")
+            return
+        new_m = mirror_teeth(marked, axis)
+        new_a = mirror_teeth(adjusted, axis)
+        merged_m = _merge_mirrored(marked, new_m)
+        merged_a = _merge_mirrored(adjusted, new_a)
+        self.workspace.set_marked_teeth(VIEW_FRONT, merged_m)
+        self.workspace.set_adjusted_teeth(VIEW_FRONT, merged_a)
+        self.workspace.record_mark_snapshot()
+        self.dirty = True
+        cnt = len(merged_m) - len(marked)
+        self.statusBar().showMessage(f"镜像复制完成：新增 {cnt} 颗（轴线 x≈{axis:.0f}）")
 
     def _close_workspace(self, silent=False):
         while self.stack.count() > 0:
@@ -286,6 +344,8 @@ class MainWindow(QMainWindow):
         self.act_close.setEnabled(False)
         self.act_face.setEnabled(False)
         self.act_detect.setEnabled(False)
+        self.act_sym.setEnabled(False)
+        self.act_mirror.setEnabled(False)
         self.act_export.setEnabled(False)
         self.act_auto.setEnabled(False)
         self.act_regen.setEnabled(False)
@@ -495,3 +555,11 @@ class MainWindow(QMainWindow):
             e.accept()
         else:
             e.ignore()
+
+
+def _merge_mirrored(orig, mirrored):
+    """把镜像结果并入原数据：原侧保留，对侧同牙位被镜像覆盖"""
+    by_site = {t.site: t for t in orig}
+    for t in mirrored:
+        by_site[t.site] = t
+    return list(by_site.values())

@@ -64,6 +64,10 @@ class WorkPanel(QWidget):
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(False)
 
+        # 中轴线（仅正面视图有效）
+        self.sym_axis = None
+        self.mark_panel.is_front = (view_id == VIEW_FRONT)
+
         # 无图时中央提示：明确告知该导入哪类照片
         if view_id == VIEW_FRONT:
             self.image_view.set_hint("请点击『载入照片』按钮或双击本区域\n导入 正面微笑照")
@@ -133,6 +137,17 @@ class WorkPanel(QWidget):
 
     def has_image(self) -> bool:
         return self.image_view.has_image()
+
+    # ---------- 中轴线 ----------
+    def set_sym_axis(self, axis_x):
+        """设置中轴线（图像x坐标，None=隐藏），同步给标记/调整覆盖层"""
+        self.sym_axis = axis_x
+        self.mark_panel.set_sym_axis(axis_x)
+        self.adjust_panel.set_sym_axis(axis_x)
+        self.update()
+
+    def get_sym_axis(self):
+        return self.sym_axis
 
     # ---------- 状态切换 ----------
     def enter_edit(self):

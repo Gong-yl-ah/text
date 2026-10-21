@@ -67,6 +67,7 @@ class TeethAdjustPanel(QWidget):
         self.bright = 0
         self.yellow = 0
         self.on_change = None
+        self.sym_axis = None        # 中轴线图像x坐标（正面视图显示/拖动，None=隐藏）
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
         self._drag_index = -1
@@ -80,6 +81,7 @@ class TeethAdjustPanel(QWidget):
         self._bright_now = 0
         self._yellow_now = 0
         self._hover = False
+        self._sym_drag = False      # 正在拖动中轴线
 
     # ---------- 数据 ----------
     def clear(self):
@@ -150,6 +152,39 @@ class TeethAdjustPanel(QWidget):
     def get_bright_yellow(self):
         return self.bright, self.yellow
 
+    # ---------- 中轴线（正面视图） ----------
+    def set_sym_axis(self, axis_x):
+        self.sym_axis = axis_x
+        self.update()
+
+    def get_sym_axis(self):
+        return self.sym_axis
+
+    def _sym_view_x(self):
+        if self.sym_axis is None or not self.image_view.has_image():
+            return None
+        return self.sym_axis * self.image_view.scale + self.image_view.offset_x
+
+    def _hit_sym(self, vx: float) -> bool:
+        sx = self._sym_view_x()
+        return self.view_kind == "front" and sx is not None and abs(vx - sx) <= 8
+
+    def _draw_sym(self, painter: QPainter):
+        if self.view_kind != "front" or self.sym_axis is None or not self.image_view.has_image():
+            return
+        sx = self._sym_view_x()
+        if sx is None:
+            return
+        pen = QPen(QColor(255, 80, 80), 1.5)
+        pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.drawLine(int(sx), 0, int(sx), self.height())
+        painter.setPen(QColor(255, 200, 200))
+        f = painter.font()
+        f.setPointSize(9)
+        painter.setFont(f)
+        painter.drawText(int(sx) + 3, 12, "中线")
+
     def set_mode(self, mode: int):
         if mode == self.mode:
             return
@@ -188,7 +223,16 @@ class TeethAdjustPanel(QWidget):
             self._bright_now = self.bright
             self._yellow_now = self.yellow
             return
-        if e.button() == Qt.LeftButton and self.dragable:
+        if e.button() == Qt.LeftButton:
+            # 优先：命中中轴线则进入拖动
+            if self._hit_sym(p.x()):
+                self._sym_drag = True
+                self._start = p
+                super().mousePressEvent(e)
+                return
+            if not self.dragable:
+                super().mousePressEvent(e)
+                return
             self._start = p
             self._flag = POINT_OUT_RECT
             for i, it in enumerate(self.items):
@@ -215,6 +259,11 @@ class TeethAdjustPanel(QWidget):
             self.image_view.mouseMoveEvent(e)
             return
         p = QPointF(e.position())
+        if self._sym_drag and (e.buttons() & Qt.LeftButton):
+            ip = self.image_view.to_image(p.x(), p.y())
+            self.sym_axis = max(0.0, ip.x())
+            self.update()
+            return
         if e.buttons() & Qt.RightButton and self._r3_drag:
             if self.mode == MODE_REAL or self.view_kind == "front":
                 y_chg = int((self._start.y() - p.y()) / 20)
@@ -311,6 +360,11 @@ class TeethAdjustPanel(QWidget):
                 self._notify()
             return
         if e.button() == Qt.LeftButton:
+            if self._sym_drag:
+                self._sym_drag = False
+                self._notify()
+                super().mouseReleaseEvent(e)
+                return
             if self._drag_index != -1:
                 self._drag_index = -1
                 self._notify()
@@ -372,6 +426,7 @@ class TeethAdjustPanel(QWidget):
                 tx = rect.x() + (rect.width() - tw) / 2
                 ty = rect.y() - 4
                 painter.drawText(QPointF(tx, ty), label)
+        self._draw_sym(painter)
         painter.end()
 
 

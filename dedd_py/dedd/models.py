@@ -157,12 +157,14 @@ class ProjData:
     front: ViewData = field(default_factory=ViewData)    # 正面视图
     lip_points: List[Tuple[float, float]] = field(default_factory=list)
     lip_closed: bool = False
+    sym_axis: Optional[float] = None                     # 正面视图中轴线（图像x坐标，None=未启用）
 
     def to_dict(self) -> dict:
         return {"version": "1.0", "basic": self.basic.to_dict(),
                 "base": self.base.to_dict(), "front": self.front.to_dict(),
                 "lip": {"points": [[round(x, 2), round(y, 2)] for x, y in self.lip_points],
-                        "closed": self.lip_closed}}
+                        "closed": self.lip_closed},
+                "sym": {"axis": self.sym_axis}}
 
     @staticmethod
     def from_dict(d: dict) -> "ProjData":
@@ -173,4 +175,35 @@ class ProjData:
         lip = d.get("lip", {}) or {}
         p.lip_points = [(float(x), float(y)) for x, y in lip.get("points", [])]
         p.lip_closed = bool(lip.get("closed", False))
+        sym = d.get("sym", {}) or {}
+        axis = sym.get("axis")
+        p.sym_axis = float(axis) if axis is not None else None
         return p
+
+
+def mirror_site(site: int) -> int:
+    """牙位左右镜像：11↔21, 12↔22, 13↔23（十位 1↔2，个位不变）"""
+    tens, ones = divmod(int(site), 10)
+    if tens == 1:
+        tens = 2
+    elif tens == 2:
+        tens = 1
+    return tens * 10 + ones
+
+
+def mirror_teeth(teeth: List[ToothData], axis_x: float) -> List[ToothData]:
+    """按中轴线 x=axis_x 镜像一组牙齿：
+    水平坐标关于轴线对称（x' = 2*axis - x），垂直坐标不变，牙位取镜像位"""
+    out: List[ToothData] = []
+    for t in teeth:
+        if t.site <= 0:
+            continue
+        out.append(ToothData(
+            site=mirror_site(t.site),
+            x1=2.0 * axis_x - t.x2,
+            y1=t.y1,
+            x2=2.0 * axis_x - t.x1,
+            y2=t.y2,
+            length=t.length,
+        ))
+    return out

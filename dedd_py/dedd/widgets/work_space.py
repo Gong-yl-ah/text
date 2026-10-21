@@ -116,6 +116,13 @@ class WorkSpace(QWidget):
     def get_bright_yellow(self, view_id: int) -> Tuple[int, int]:
         return (self.base_panel if view_id == VIEW_BASE else self.front_panel).adjust_panel.get_bright_yellow()
 
+    # ---------- 中轴线（正面视图） ----------
+    def set_sym_axis(self, axis_x):
+        self.front_panel.set_sym_axis(axis_x)
+
+    def get_sym_axis(self):
+        return self.front_panel.get_sym_axis()
+
     # ---------- 撤销/重做（标记牙位快照） ----------
     def _snapshot(self):
         self._undo_stack.append({"base": [t.to_dict() for t in self.base_panel.get_marked_teeth_data()],
