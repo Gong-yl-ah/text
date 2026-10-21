@@ -110,6 +110,18 @@ class WorkSpace(QWidget):
     def set_lip_closed(self, closed: bool):
         self.front_panel.set_lip_closed(closed)
 
+    def set_lip_upper_points(self, points):
+        self.front_panel.set_lip_upper_points(points)
+
+    def get_lip_upper_points(self):
+        return self.front_panel.get_lip_upper_points()
+
+    def get_lip_upper_closed(self) -> bool:
+        return self.front_panel.is_lip_upper_closed()
+
+    def set_lip_upper_closed(self, closed: bool):
+        self.front_panel.set_lip_upper_closed(closed)
+
     def set_bright_yellow(self, view_id: int, bright: int, yellow: int):
         (self.base_panel if view_id == VIEW_BASE else self.front_panel).adjust_panel.set_bright_yellow(bright, yellow)
 

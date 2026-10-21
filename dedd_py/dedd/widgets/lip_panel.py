@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """唇线标记面板 —— 对应原 DEDD 项目的 CurvePanel
 
+支持上唇线 / 下唇线两条独立曲线：
+  - 下唇线（绿色）：沿下唇切缘微笑线标记，默认
+  - 上唇线（红色）：沿上唇切缘标记（切缘设计参考）
+左上角实时提示当前标记的是哪条，另一条以半透明虚线保留。
+
 交互：
   左键单击    —— 添加点；点中起点则闭合曲线
   左键拖拽点  —— 移动点
@@ -9,15 +14,21 @@
 """
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from .image_view import ImageView
 
 PT_RADIUS = 5
+
+KIND_LOWER = "lower"
+KIND_UPPER = "upper"
+
+COLOR = {KIND_LOWER: QColor(0, 220, 0), KIND_UPPER: QColor(230, 60, 60)}
+TITLE = {KIND_LOWER: "当前标记：下唇线（沿切缘微笑线）", KIND_UPPER: "当前标记：上唇线（切缘参考线）"}
 
 
 def _dist(a: QPointF, b: QPointF) -> float:
@@ -55,13 +66,19 @@ def _bezier_segments(points: List[QPointF], closed: bool):
 
 
 class LipPanel(QWidget):
-    """唇线覆盖层"""
+    """唇线覆盖层（上/下两条独立曲线，互不覆盖）"""
 
     def __init__(self, image_view: ImageView, parent=None):
         super().__init__(parent)
         self.image_view = image_view
-        self.points: List[QPointF] = []      # 视图坐标
-        self.img_points: List[QPointF] = []  # 图像坐标
+        self.current = KIND_LOWER
+        # 两条线独立存储（图像坐标）
+        self._lines: Dict[str, Dict] = {
+            KIND_LOWER: {"pts": [], "closed": False},
+            KIND_UPPER: {"pts": [], "closed": False},
+        }
+        self.points: List[QPointF] = []      # 当前线（视图坐标，交互用）
+        self.img_points: List[QPointF] = []  # 当前线（图像坐标）
         self.is_closed = False
         self.on_change = None
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -72,21 +89,61 @@ class LipPanel(QWidget):
 
     # ---------- 数据 ----------
     def clear(self):
+        for k in self._lines:
+            self._lines[k] = {"pts": [], "closed": False}
         self.points.clear()
         self.img_points.clear()
         self.is_closed = False
         self._paint_mode = False
         self.update()
 
-    def set_img_points(self, img_points: List[Tuple[float, float]]):
-        self.clear()
-        for x, y in img_points:
+    def set_current(self, kind: str):
+        """切换当前编辑的唇线（lower/upper），另一条数据原样保留"""
+        if kind not in self._lines or kind == self.current:
+            return
+        self._save_current()
+        self.current = kind
+        self._load_current()
+        self._notify()
+        self.update()
+
+    def _save_current(self):
+        self._lines[self.current] = {"pts": self.get_img_points(), "closed": self.is_closed}
+
+    def _load_current(self):
+        line = self._lines[self.current]
+        self.points.clear()
+        self.img_points.clear()
+        for x, y in line["pts"]:
             self.img_points.append(QPointF(x, y))
             self.points.append(self.image_view.to_view(x, y))
+        self.is_closed = line["closed"]
+
+    def set_img_points(self, img_points: List[Tuple[float, float]]):
+        self._save_current()
+        self._lines[self.current] = {"pts": list(img_points), "closed": False}
+        self._load_current()
         self.update()
 
     def get_img_points(self) -> List[Tuple[float, float]]:
         return [(p.x(), p.y()) for p in self.img_points]
+
+    def get_points_of(self, kind: str) -> List[Tuple[float, float]]:
+        """取指定唇线的图像坐标（不改变当前编辑状态）"""
+        if kind == self.current:
+            return self.get_img_points()
+        return [tuple(p) for p in self._lines[kind]["pts"]]
+
+    def set_points_of(self, kind: str, pts: List[Tuple[float, float]], closed: bool = False):
+        self._lines[kind] = {"pts": [(float(x), float(y)) for x, y in pts], "closed": closed}
+        if kind == self.current:
+            self._load_current()
+            self.update()
+
+    def set_closed(self, closed: bool):
+        self.is_closed = closed
+        self._lines[self.current]["closed"] = closed
+        self.update()
 
     def _notify(self):
         if self.on_change:
@@ -149,6 +206,7 @@ class LipPanel(QWidget):
         # 点中第一个点 → 闭合
         if len(self.points) >= 2 and _dist(p, self.points[0]) < PT_RADIUS:
             self.is_closed = True
+            self._lines[self.current]["closed"] = True
             self._paint_mode = False
             self._notify()
             self.update()
@@ -178,6 +236,7 @@ class LipPanel(QWidget):
                 del self.img_points[i]
                 if len(self.points) <= 2:
                     self.is_closed = False
+                    self._lines[self.current]["closed"] = False
                 self._notify()
                 self.update()
                 e.accept()
@@ -189,17 +248,38 @@ class LipPanel(QWidget):
         self.update()
 
     # ---------- 绘制 ----------
+    def _draw_curve(self, painter, pts, closed, color, width, dash=False):
+        if len(pts) < 2:
+            return
+        pen = QPen(color, width)
+        if dash:
+            pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        path = QPainterPath(pts[0])
+        for c0, c1, p1 in _bezier_segments(pts, closed):
+            path.cubicTo(c0, c1, p1)
+        painter.drawPath(path)
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+        for p in pts:
+            painter.drawEllipse(p, PT_RADIUS, PT_RADIUS)
+
     def paintEvent(self, e):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(QPen(QColor(0, 220, 0), 2))
-        if len(self.points) >= 2:
-            path = QPainterPath(self.points[0])
-            for c0, c1, p1 in _bezier_segments(self.points, self.is_closed):
-                path.cubicTo(c0, c1, p1)
-            painter.drawPath(path)
-        painter.setBrush(QColor(0, 220, 0))
-        painter.setPen(Qt.NoPen)
-        for p in self.points:
-            painter.drawEllipse(p, PT_RADIUS, PT_RADIUS)
+        # 顶部提示：当前是哪条唇线
+        f = QFont()
+        f.setPointSize(10)
+        painter.setFont(f)
+        painter.setPen(QColor(40, 40, 40))
+        painter.drawText(8, 18, TITLE[self.current])
+        # 另一条线（半透明虚线）
+        other = KIND_UPPER if self.current == KIND_LOWER else KIND_LOWER
+        op = [QPointF(x, y) for x, y in self._lines[other]["pts"]]
+        if len(op) >= 2:
+            c = QColor(COLOR[other])
+            c.setAlpha(100)
+            self._draw_curve(painter, op, self._lines[other]["closed"], c, 1, dash=True)
+        # 当前线
+        self._draw_curve(painter, self.points, self.is_closed, COLOR[self.current], 2)
         painter.end()

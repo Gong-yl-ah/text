@@ -232,6 +232,9 @@ class MainWindow(QMainWindow):
         if proj.lip_points:
             self.workspace.set_lip_points(proj.lip_points)
             self.workspace.set_lip_closed(proj.lip_closed)
+        if proj.lip_upper_points:
+            self.workspace.set_lip_upper_points(proj.lip_upper_points)
+            self.workspace.set_lip_upper_closed(proj.lip_upper_closed)
         self.workspace.set_sym_axis(proj.sym_axis)
         self._update_info_bar()
         self.statusBar().showMessage(f"已打开：{os.path.basename(path)}")
@@ -290,6 +293,8 @@ class MainWindow(QMainWindow):
         proj.front.bright, proj.front.yellow = self.workspace.get_bright_yellow(VIEW_FRONT)
         proj.lip_points = self.workspace.get_lip_points()
         proj.lip_closed = self.workspace.get_lip_closed()
+        proj.lip_upper_points = self.workspace.get_lip_upper_points()
+        proj.lip_upper_closed = self.workspace.get_lip_upper_closed()
         proj.sym_axis = self.workspace.get_sym_axis()
         return proj
 

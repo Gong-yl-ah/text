@@ -155,15 +155,19 @@ class ProjData:
     basic: BasicInfo = field(default_factory=BasicInfo)
     base: ViewData = field(default_factory=ViewData)     # 口内视图
     front: ViewData = field(default_factory=ViewData)    # 正面视图
-    lip_points: List[Tuple[float, float]] = field(default_factory=list)
+    lip_points: List[Tuple[float, float]] = field(default_factory=list)     # 下唇线（兼容旧字段）
     lip_closed: bool = False
+    lip_upper_points: List[Tuple[float, float]] = field(default_factory=list)  # 上唇线
+    lip_upper_closed: bool = False
     sym_axis: Optional[float] = None                     # 正面视图中轴线（图像x坐标，None=未启用）
 
     def to_dict(self) -> dict:
-        return {"version": "1.0", "basic": self.basic.to_dict(),
+        return {"version": "1.1", "basic": self.basic.to_dict(),
                 "base": self.base.to_dict(), "front": self.front.to_dict(),
                 "lip": {"points": [[round(x, 2), round(y, 2)] for x, y in self.lip_points],
-                        "closed": self.lip_closed},
+                        "closed": self.lip_closed,
+                        "upper": {"points": [[round(x, 2), round(y, 2)] for x, y in self.lip_upper_points],
+                                  "closed": self.lip_upper_closed}},
                 "sym": {"axis": self.sym_axis}}
 
     @staticmethod
@@ -175,6 +179,10 @@ class ProjData:
         lip = d.get("lip", {}) or {}
         p.lip_points = [(float(x), float(y)) for x, y in lip.get("points", [])]
         p.lip_closed = bool(lip.get("closed", False))
+        upper = lip.get("upper", {}) or {}
+        if upper:
+            p.lip_upper_points = [(float(x), float(y)) for x, y in upper.get("points", [])]
+            p.lip_upper_closed = bool(upper.get("closed", False))
         sym = d.get("sym", {}) or {}
         axis = sym.get("axis")
         p.sym_axis = float(axis) if axis is not None else None

@@ -186,10 +186,28 @@ def _bright_mask(image: np.ndarray):
     return mask
 
 
+# 前牙宽度比例（相对中切牙=1.0，按口腔解剖均值：尖牙0.93/侧切牙0.78/中切牙1.0）
+# 排列：13 12 11 | 21 22 23
+FRONT_TOOTH_RATIOS = (0.93, 0.78, 1.0, 1.0, 0.78, 0.93)
+
+
+def _ratio_bounds(xl: int, xr: int, ratios):
+    """按宽度比例把 [xl,xr] 分成 len(ratios) 段的边界列表（n+1 个）"""
+    total = float(sum(ratios))
+    bounds = [float(xl)]
+    acc = 0.0
+    for r in ratios[:-1]:
+        acc += r
+        bounds.append(xl + (xr - xl) * acc / total)
+    bounds.append(float(xr))
+    return bounds
+
+
 def _split_tooth_boxes(mask: np.ndarray, xl: int, xr: int, n: int = 6):
     """在掩膜 x∈[xl,xr] 区域内把牙列分成 n 段牙位框。
 
-    返回 [(x1, y1, x2, y2), ...]；等分打底，内部边界向最近的投影谷吸附。
+    返回 [(x1, y1, x2, y2), ...]；按前牙宽度比例打底（更贴合中切牙宽/侧切牙窄），
+    内部边界向最近的投影谷吸附。
     """
     import cv2
     h, w = mask.shape
@@ -203,9 +221,15 @@ def _split_tooth_boxes(mask: np.ndarray, xl: int, xr: int, n: int = 6):
     thr = cs.max() * 0.45
     valley = [i for i in range(2, len(cs) - 2) if cs[i] < thr
               and cs[i] <= cs[i - 1] and cs[i] <= cs[i + 1]]
+    # 比例打底边界（缺牙段时退化为等分）
+    ratios = FRONT_TOOTH_RATIOS[:n] if n <= len(FRONT_TOOTH_RATIOS) else None
+    if ratios:
+        bounds = _ratio_bounds(xl, xr, ratios)
+    else:
+        seg_w = (xr - xl) / n
+        bounds = [xl + i * seg_w for i in range(n + 1)]
     seg_w = (xr - xl) / n
-    # 等分边界 + 向谷吸附
-    bounds = [xl + i * seg_w for i in range(n + 1)]
+    # 边界向谷吸附
     for i in range(1, n):
         b = bounds[i]
         lo, hi = b - seg_w * 0.35, b + seg_w * 0.35
@@ -284,8 +308,9 @@ def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
             return []
         boxes = _split_tooth_boxes(tm, xl, xr, len(sites))
         if len(boxes) < len(sites):
-            seg_w = (xr - xl) / len(sites)
-            boxes = [(xl + i * seg_w, 0.0, xl + (i + 1) * seg_w, float(tm.shape[0] - 1))
+            # 分牙失败：按前牙宽度比例退化为框
+            bb = _ratio_bounds(xl, xr, FRONT_TOOTH_RATIOS[:len(sites)])
+            boxes = [(bb[i], 0.0, bb[i + 1], float(tm.shape[0] - 1))
                      for i in range(len(sites))]
         # 每框 y 用牙齿高光行带约束（贴牙冠）
         rowt = tm.sum(axis=1) / 255.0
@@ -317,12 +342,12 @@ def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
     xl, xr = int(xs[0]), int(xs[-1])
     boxes = _split_tooth_boxes(mask, xl, xr, len(sites))
     if len(boxes) < len(sites):
-        # 分牙失败：退化为等分
-        seg_w = (xr - xl) / len(sites)
+        # 分牙失败：按前牙宽度比例退化为框
+        bb = _ratio_bounds(xl, xr, FRONT_TOOTH_RATIOS[:len(sites)])
         boxes = []
         for i in range(len(sites)):
-            bx1, bx2 = xl + i * seg_w, xl + (i + 1) * seg_w
-            seg = mask[y_top:y_bot + 1, int(bx1):int(bx2)]
+            bx1, bx2 = int(round(bb[i])), int(round(bb[i + 1]))
+            seg = mask[y_top:y_bot + 1, bx1:bx2]
             ys = np.where(seg.sum(axis=1) / 255.0 > 0)
             if len(ys[0]) == 0:
                 continue
@@ -360,7 +385,7 @@ def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
     rw, rh = roi.shape[1], roi.shape[0]
     boxes = _split_tooth_boxes(mask, 0, rw - 1, len(sites))
     if len(boxes) < len(sites):
-        # 退化：等分（原行为）
-        tw = rw / len(sites)
-        boxes = [(i * tw, rh * 0.05, (i + 1) * tw, rh * 1.05) for i in range(len(sites))]
+        # 退化：按前牙宽度比例分配
+        bb = _ratio_bounds(0, rw - 1, FRONT_TOOTH_RATIOS[:len(sites)])
+        boxes = [(bb[i], rh * 0.05, bb[i + 1], rh * 1.05) for i in range(len(sites))]
     return [(sites[i], ox + b[0], oy + b[1], ox + b[2], oy + b[3]) for i, b in enumerate(boxes)]

@@ -92,9 +92,12 @@ class WorkPanel(QWidget):
         self.btn_mode_none = QPushButton("隐藏", self.button_bar)
         self.btn_apply_unify = QPushButton("应用旋转", self.button_bar)
         self.btn_restore_unify = QPushButton("恢复原图", self.button_bar)
+        self.btn_lip_lower = QPushButton("下唇线", self.button_bar)
+        self.btn_lip_upper = QPushButton("上唇线", self.button_bar)
         for b in (self.btn_load, self.btn_rot_left, self.btn_rot_right,
                   self.btn_mode_contour, self.btn_mode_real, self.btn_mode_none,
-                  self.btn_apply_unify, self.btn_restore_unify):
+                  self.btn_apply_unify, self.btn_restore_unify,
+                  self.btn_lip_lower, self.btn_lip_upper):
             b.setFixedHeight(26)
             bar.addWidget(b)
         bar.addStretch(1)
@@ -110,6 +113,8 @@ class WorkPanel(QWidget):
         self.btn_mode_none.clicked.connect(lambda: self.adjust_panel.set_mode(MODE_NONE))
         self.btn_apply_unify.clicked.connect(self.apply_unify_rotation)
         self.btn_restore_unify.clicked.connect(self.restore_unify)
+        self.btn_lip_lower.clicked.connect(lambda: self._set_lip_kind("lower"))
+        self.btn_lip_upper.clicked.connect(lambda: self._set_lip_kind("upper"))
 
     def _load_clicked(self):
         if self.on_load_photo:
@@ -253,8 +258,24 @@ class WorkPanel(QWidget):
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(False)
         self.unify_panel.setVisible(False)
-        self.button_bar.setVisible(False)
+        # 唇线步骤显示按钮条（仅上/下唇线切换）
+        self.button_bar.setVisible(self.view_id == VIEW_FRONT)
+        self.btn_load.setVisible(False)
+        self.btn_rot_left.setVisible(False)
+        self.btn_rot_right.setVisible(False)
+        self.btn_mode_contour.setVisible(False)
+        self.btn_mode_real.setVisible(False)
+        self.btn_mode_none.setVisible(False)
+        self.btn_apply_unify.setVisible(False)
+        self.btn_restore_unify.setVisible(False)
+        self.btn_lip_lower.setVisible(self.view_id == VIEW_FRONT)
+        self.btn_lip_upper.setVisible(self.view_id == VIEW_FRONT)
         self.update()
+
+    def _set_lip_kind(self, kind: str):
+        self.lip_panel.set_current(kind)
+        self.btn_lip_lower.setEnabled(kind != "lower")
+        self.btn_lip_upper.setEnabled(kind != "upper")
 
     def enter_mark_teeth(self):
         self.status = STATUS_MARK_TEETH
@@ -296,17 +317,31 @@ class WorkPanel(QWidget):
         return self.adjust_panel.get_current_teeth_data()
 
     def set_lip_points(self, points):
+        """设置当前唇线（默认下唇线）的点"""
+        self.lip_panel.set_current("lower")
         self.lip_panel.set_img_points(points)
 
     def get_lip_points(self):
-        return self.lip_panel.get_img_points()
+        """下唇线图像坐标（兼容旧接口，供美学参数使用）"""
+        return self.lip_panel.get_points_of("lower")
+
+    def set_lip_upper_points(self, points):
+        self.lip_panel.set_points_of("upper", points)
+
+    def get_lip_upper_points(self):
+        return self.lip_panel.get_points_of("upper")
 
     def is_lip_closed(self) -> bool:
-        return self.lip_panel.is_closed
+        return self.lip_panel._lines["lower"]["closed"]
 
     def set_lip_closed(self, closed: bool):
-        self.lip_panel.is_closed = closed
-        self.lip_panel.update()
+        self.lip_panel.set_points_of("lower", self.lip_panel.get_points_of("lower"), closed=closed)
+
+    def is_lip_upper_closed(self) -> bool:
+        return self.lip_panel._lines["upper"]["closed"]
+
+    def set_lip_upper_closed(self, closed: bool):
+        self.lip_panel.set_points_of("upper", self.lip_panel.get_points_of("upper"), closed=closed)
 
     # ---------- 缩放同步 ----------
     def sync_overlays_zoom(self):
