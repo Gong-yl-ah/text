@@ -173,6 +173,8 @@ class WorkPanel(QWidget):
         self.btn_load.setVisible(True)
         self.btn_rot_left.setVisible(True)
         self.btn_rot_right.setVisible(True)
+        self.btn_apply_unify.setVisible(False)
+        self.btn_restore_unify.setVisible(False)
         self.update()
 
     def enter_unify(self):
@@ -250,6 +252,7 @@ class WorkPanel(QWidget):
         self.lip_panel.setVisible(self.view_id == VIEW_FRONT)
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(False)
+        self.unify_panel.setVisible(False)
         self.button_bar.setVisible(False)
         self.update()
 
@@ -258,6 +261,7 @@ class WorkPanel(QWidget):
         self.lip_panel.setVisible(False)
         self.mark_panel.setVisible(True)
         self.adjust_panel.setVisible(False)
+        self.unify_panel.setVisible(False)
         self.button_bar.setVisible(False)
         self.update()
 
@@ -266,6 +270,7 @@ class WorkPanel(QWidget):
         self.lip_panel.setVisible(False)
         self.mark_panel.setVisible(False)
         self.adjust_panel.setVisible(True)
+        self.unify_panel.setVisible(False)
         self.button_bar.setVisible(True)
         self.btn_load.setVisible(False)
         self.btn_rot_left.setVisible(False)
@@ -273,6 +278,8 @@ class WorkPanel(QWidget):
         self.btn_mode_contour.setVisible(True)
         self.btn_mode_real.setVisible(True)
         self.btn_mode_none.setVisible(True)
+        self.btn_apply_unify.setVisible(False)
+        self.btn_restore_unify.setVisible(False)
         self.update()
 
     # ---------- 数据 ----------

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DEDD 数字化美学牙科设计 · 使用指南</title>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 26px; margin: 8px 0 4px; }
+  .sub { color: #666; margin-bottom: 22px; }
+  h2 { font-size: 20px; border-left: 5px solid #1a7ad4; padding-left: 10px; margin: 34px 0 12px; }
+  .step { background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+  .step img { width: 100%; border: 1px solid #ddd; border-radius: 6px; margin: 8px 0; }
+  .op { background: #eef4fb; border-radius: 6px; padding: 10px 14px; line-height: 1.8; font-size: 14px; }
+  .op b { color: #1a7ad4; }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 14px; }
+  th, td { border: 1px solid #dfe3e8; padding: 8px 10px; text-align: left; }
+  th { background: #f0f4f9; }
+  .tip { background: #fff8e6; border: 1px solid #f0d488; border-radius: 6px; padding: 10px 14px; margin: 10px 0; font-size: 14px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DEDD 数字化美学牙科设计 · 使用指南</h1>
+  <div class="sub">Python 本地版 · 启动：双击 <b>启动程序.bat</b> · 运行环境：Anaconda dedd（Python 3.11.17）</div>
+
+  <div class="tip">总体流程：<b>新建/打开工程 → 载入照片 → 按顶部 6 个步骤标签从左到右操作 → 导出设计图</b>。
+  六步：编辑照片 → 平行合平面 → 标记唇线 → 标记牙位 → 美学设计 → 导出设计。</div>
+
+  <div class="step">
+    <h2>步骤 1 · 编辑照片</h2>
+    <img src="流程示例/step01_编辑照片.png" alt="编辑照片">
+    <div class="op">
+      ① 顶部菜单 <b>文件 → 新建工程</b>（或打开已有 <b>.deddp</b> 工程文件）；<br>
+      ② 左侧<b>正面视图</b>载入患者微笑正面照，右侧<b>口内视图</b>载入口内牙列照（点视图下方「载入照片」按钮）；<br>
+      ③ 可用「左转90°/右转90°」调整照片方向。
+    </div>
+  </div>
+
+  <div class="step">
+    <h2>步骤 2 · 平行合平面</h2>
+    <img src="流程示例/step02_平行合平面_两点.png" alt="平行合平面">
+    <div class="op">
+      ① 在<b>口内视图</b>沿咬合平面点<b>两个点</b>（左键单击，如牙列左侧一点、右侧一点，可拖动/右键删点）；<br>
+      ② 点「<b>应用旋转</b>」→ 程序自动旋转照片，把合平面校成水平；<br>
+      ③ 不满意点「<b>恢复原图</b>」回到旋转前。
+    </div>
+  </div>
+
+  <div class="step">
+    <h2>步骤 3 · 标记唇线</h2>
+    <img src="流程示例/step03_标记唇线.png" alt="标记唇线">
+    <div class="op">
+      ① 在<b>正面视图</b>沿下唇微笑线（切缘曲线）单击添加绿色控制点；<br>
+      ② 可拖动点调整，右键删除；曲线自动平滑；<br>
+      ③ 点回起点可闭合曲线。
+    </div>
+  </div>
+
+  <div class="step">
+    <h2>步骤 4 · 标记牙位</h2>
+    <img src="流程示例/step04_标记牙位_AI检测.png" alt="标记牙位">
+    <div class="op">
+      ① 点工具栏「<b>AI检测</b>」→ 口内、正面两视图自动生成 6 颗前牙牙位框（13/12/11/21/22/23）；<br>
+      ② 也可在视图上<b>手动拖框</b>标记每颗牙；<br>
+      ③ 拖动框可移动、拖边角可缩放、右键删除；选中牙位可输入<b>冠长</b>（mm，用于美学参数毫米校准）；<br>
+      ④ AI 结果仅作初框，请逐颗微调贴合牙冠。
+    </div>
+  </div>
+
+  <div class="step">
+    <h2>步骤 5 · 美学设计</h2>
+    <img src="流程示例/step05_美学设计.png" alt="美学设计">
+    <div class="op">
+      ① 点工具栏「<b>自动优化</b>」→ 按美学比例统一牙冠高度；「<b>重新设计</b>」→ 重新生成牙冠模型；<br>
+      ② 视图下方「<b>轮廓 / 牙冠 / 隐藏</b>」切换显示模式；<br>
+      ③ 可拖动牙冠框微调每颗牙的形态与位置；<br>
+      ④ 点「<b>美学参数</b>」可实时查看宽长比、宽度比、龈缘位置分析。
+    </div>
+  </div>
+
+  <div class="step">
+    <h2>步骤 6 · 导出设计</h2>
+    <img src="流程示例/step06_导出设计.png" alt="导出设计">
+    <div class="op">
+      ① 查看设计方案总览（患者信息 + 设计图示 + 口内/正面「设计前/设计后」对比 + 美学参数标尺）；<br>
+      ② 点「<b>保存设计图(JPG)</b>」导出完整设计图（含标尺），可直接发给患者/技工沟通。
+    </div>
+  </div>
+
+  <h2>工具栏功能速查</h2>
+  <table>
+    <tr><th>按钮</th><th>作用</th></tr>
+    <tr><td>人脸分析</td><td>本地 OpenCV 检测人脸/眼睛，自动旋转摆正并裁剪人脸</td></tr>
+    <tr><td>AI检测</td><td>口内/正面双视图自动生成 6 颗前牙牙位框（亮度分牙，本地无网络）</td></tr>
+    <tr><td>保存设计图</td><td>把设计方案导出为 JPG（含美学参数标尺）</td></tr>
+    <tr><td>导入照片</td><td>为当前视图重新载入照片</td></tr>
+    <tr><td>撤销 / 重做</td><td>撤销/恢复标记与调整操作</td></tr>
+    <tr><td>自动优化</td><td>按美学比例统一牙冠高度</td></tr>
+    <tr><td>重新设计</td><td>重新生成牙冠模型</td></tr>
+    <tr><td>中轴线</td><td>正面视图显示/拖动中轴线（红色虚线）</td></tr>
+    <tr><td>镜像复制</td><td>按中轴线把已标记牙齿一键镜像复制到对侧（11↔21、12↔22、13↔23）</td></tr>
+    <tr><td>美学参数</td><td>实时分析宽长比/宽度比/龈缘位置（依据期刊文献）</td></tr>
+  </table>
+
+  <div class="tip">
+    <b>工程文件</b>：保存为 .deddp（zip 内含双视图照片+全部标记数据），下次「文件 → 打开工程」继续设计。
+    <b>更新日志</b>：每次代码更新记录在《更新日志.md》，含提交号，可随时查阅。
+  </div>
+</div>
+</body>
+</html>

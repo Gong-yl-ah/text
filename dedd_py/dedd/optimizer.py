@@ -230,17 +230,82 @@ def _split_tooth_boxes(mask: np.ndarray, xl: int, xr: int, n: int = 6):
 
 
 def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
-    """口内牙列自动检测：返回 [(site, x1, y1, x2, y2), ...]（图像坐标）"""
+    """口内牙列自动检测：返回 [(site, x1, y1, x2, y2), ...]（图像坐标）
+
+    两种场景自适应：
+      - 标准牙列照（背景暗/主体即牙列）：Otsu 亮度分割 → 列投影分牙；
+      - 白背景牵拉/微笑照（脸为主）：排除背景 → 主体下部+牙齿高光带定位嘴部。
+    """
     import cv2
     if image is None:
         return []
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape
     mask = _bright_mask(image)
-    h, w = mask.shape
+
+    if mask.mean() / 255.0 > 0.45:
+        # ---- 白背景照：背景最亮且占大头，脸为低亮主体 ----
+        body = (gray < 215).astype(np.uint8) * 255
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        body = cv2.morphologyEx(body, cv2.MORPH_OPEN, kernel, iterations=2)
+        rowb = body.sum(axis=1) / 255.0
+        if rowb.max() <= 0:
+            return []
+        rb = np.where(rowb > rowb.max() * 0.15)[0]
+        if len(rb) == 0:
+            return []
+        # 牙齿在主体（脸）下部：取下半 50% 起
+        y_top = int(rb[0] + 0.5 * (rb[-1] - rb[0]))
+        y_bot = int(rb[-1])
+        if y_bot - y_top < 20:
+            y_top = int(rb[0])
+        # 牙齿高光：仅在脸掩膜内 > 80 分位亮度（且不低于 175），排除白背景
+        sub_body = body[y_top:y_bot + 1]
+        sub_gray = gray[y_top:y_bot + 1]
+        vals = sub_gray[sub_body > 0]
+        p80 = float(np.percentile(vals, 80)) if vals.size else 175.0
+        tm = ((sub_body > 0) & (sub_gray > max(p80, 175))).astype(np.uint8) * 255
+        tm = cv2.morphologyEx(tm, cv2.MORPH_OPEN, kernel, iterations=2)
+        col = tm.sum(axis=0) / 255.0
+        if col.max() <= 0:
+            # 牙齿高光不足：退回主体宽度
+            col = sub_body.sum(axis=0) / 255.0
+            tm = sub_body
+        # 中央能量带：取包含中央 76% 列能量的区间（排除两侧背景晕影/杂物）
+        csum = np.cumsum(col)
+        total = csum[-1] if csum.size else 0.0
+        if total <= 0:
+            return []
+        xl = int(np.searchsorted(csum, total * 0.12))
+        xr = int(np.searchsorted(csum, total * 0.88))
+        xl = max(0, min(xl, w - 1))
+        xr = max(xl + 1, min(xr, w - 1))
+        if xr - xl < 20:
+            return []
+        boxes = _split_tooth_boxes(tm, xl, xr, len(sites))
+        if len(boxes) < len(sites):
+            seg_w = (xr - xl) / len(sites)
+            boxes = [(xl + i * seg_w, 0.0, xl + (i + 1) * seg_w, float(tm.shape[0] - 1))
+                     for i in range(len(sites))]
+        # 每框 y 用牙齿高光行带约束（贴牙冠）
+        rowt = tm.sum(axis=1) / 255.0
+        rt = np.where(rowt > rowt.max() * 0.15)[0] if rowt.max() > 0 else np.array([])
+        if len(rt) > 0:
+            ty1, ty2 = int(rt[0]), int(rt[-1])
+            return [(sites[i],
+                     max(0.0, b[0]),
+                     float(y_top + ty1 - 4),
+                     min(float(w), b[2]),
+                     float(y_top + ty2 + 4))
+                    for i, b in enumerate(boxes) if i < len(sites)]
+        return [(sites[i], b[0], float(y_top + b[1]), b[2], float(y_top + b[3]))
+                for i, b in enumerate(boxes) if i < len(sites)]
+
+    # ---- 标准牙列照（背景暗/牙列即主体）----
     rowsum = mask.sum(axis=1) / 255.0
     rows = np.where(rowsum > rowsum.max() * 0.25)[0] if rowsum.max() > 0 else np.array([])
     if len(rows) == 0:
         return []
-    # 牙列垂直范围：取高亮最集中的一段（防止上下牙/杂物干扰）
     y_top, y_bot = int(rows[0]), int(rows[-1])
     roi_y = mask[y_top:y_bot + 1, :]
     colsum = roi_y.sum(axis=0) / 255.0
