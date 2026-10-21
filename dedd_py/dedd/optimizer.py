@@ -253,139 +253,264 @@ def _split_tooth_boxes(mask: np.ndarray, xl: int, xr: int, n: int = 6):
     return boxes
 
 
-def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
-    """口内牙列自动检测：返回 [(site, x1, y1, x2, y2), ...]（图像坐标）
+def _downscale_teeth(image: np.ndarray, max_dim: int = 1600):
+    """大图降采样提速，返回 (小图, 缩放比例)；坐标换算用原坐标 = 小图坐标 / scale"""
+    h, w = image.shape[:2]
+    scale = 1.0
+    if max(h, w) > max_dim:
+        scale = max_dim / float(max(h, w))
+        import cv2
+        image = cv2.resize(image, (int(round(w * scale)), int(round(h * scale))),
+                           interpolation=cv2.INTER_AREA)
+    return image, scale
 
-    两种场景自适应：
-      - 标准牙列照（背景暗/主体即牙列）：Otsu 亮度分割 → 列投影分牙；
-      - 白背景牵拉/微笑照（脸为主）：排除背景 → 主体下部+牙齿高光带定位嘴部。
-    """
+
+def _locate_smile_roi(gray: np.ndarray):
+    """仅 Haar smile → 嘴框略扩；无 → None"""
+    import cv2
+    h, w = gray.shape
+    smile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_smile.xml")
+    mw, mh = max(30, int(w * 0.08)), max(20, int(h * 0.04))
+    for min_nei in (12, 8, 5):
+        ss = smile.detectMultiScale(gray, 1.5, min_nei, minSize=(mw, mh))
+        if len(ss) > 0:
+            x, y, rw, rh = max(ss, key=lambda s: s[2] * s[3])
+            return (max(0, x - int(rw * 0.1)), max(0, y - int(rh * 0.15)),
+                    min(w, x + rw + int(rw * 0.1)), min(h, y + rh + int(rh * 0.15)))
+    return None
+
+
+def _locate_face_roi(gray: np.ndarray):
+    """仅 Haar face → 脸框 0.40~0.92（嘴/上前牙带）；无 → None"""
+    import cv2
+    h, w = gray.shape
+    face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    fs = face.detectMultiScale(gray, 1.1, 5, minSize=(max(40, int(w * 0.12)), max(40, int(h * 0.12))))
+    if len(fs) > 0:
+        fx, fy, fw, fh = max(fs, key=lambda s: s[2] * s[3])
+        return (fx, int(fy + 0.40 * fh), fx + fw, int(fy + 0.92 * fh))
+    return None
+
+
+def _locate_mouth_roi(gray: np.ndarray):
+    """定位嘴部 ROI（smile → face → None）"""
+    roi = _locate_smile_roi(gray)
+    if roi is None:
+        roi = _locate_face_roi(gray)
+    return roi
+
+
+def _teeth_mask(roi: np.ndarray) -> np.ndarray:
+    """牙齿掩膜：低饱和+高亮（牙/瓷白）与亮度高分位双信号合并"""
+    import cv2
+    gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
+    hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+    S, V = hsv[:, :, 1].astype(np.float32), hsv[:, :, 2].astype(np.float32)
+    m1 = ((S < 60) & (V > 150)).astype(np.uint8) * 255
+    body = V > 60
+    vals = gray[body]
+    if vals.size:
+        thr = max(float(np.percentile(vals, 85)), 165.0)
+    else:
+        thr = 180.0
+    m2 = ((V > thr) & (S < 120)).astype(np.uint8) * 255
+    m = cv2.bitwise_or(m1, m2)
+    # 排除近白背景（白底照）：V>232 整块剔除，避免背景压过牙齿带
+    m[V > 232] = 0
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel, iterations=2)
+    return m
+
+
+def _tooth_band(mask: np.ndarray):
+    """在掩膜上找牙齿横带：行/列投影的峰值窗口（牙齿是最亮的横带，非最长带）
+    返回 (yy1, yy2, xx1, xx2)（掩膜坐标）或 None"""
+    rh, rw = mask.shape
+    rowt = mask.sum(axis=1) / 255.0
+    rowt = np.convolve(rowt, np.ones(5) / 5.0, mode="same")
+    if rowt.max() <= 0:
+        return None
+    arg = int(np.argmax(rowt))
+    peak = rowt[arg]
+    # 上前牙先验：峰值落在 ROI 底部（>72%）时，优先取上半部的最强带
+    if arg > rh * 0.72:
+        top = rowt[:int(rh * 0.7)]
+        if top.size and top.max() > peak * 0.5:
+            arg = int(np.argmax(top))
+            peak = rowt[arg]
+    yy1 = arg
+    while yy1 > 0 and rowt[yy1 - 1] > peak * 0.5:
+        yy1 -= 1
+    yy2 = arg
+    while yy2 < rh - 1 and rowt[yy2 + 1] > peak * 0.5:
+        yy2 += 1
+    if yy2 - yy1 < 6:
+        return None
+    band = mask[yy1:yy2 + 1]
+    col = band.sum(axis=0) / 255.0
+    col = np.convolve(col, np.ones(5) / 5.0, mode="same")
+    if col.max() <= 0:
+        return None
+    csum = np.cumsum(col)
+    total = csum[-1]
+    if total <= 0:
+        return None
+    xx1 = int(np.searchsorted(csum, total * 0.06))
+    xx2 = int(np.searchsorted(csum, total * 0.94))
+    xx1 = max(0, min(xx1, rw - 1))
+    xx2 = max(xx1 + 1, min(xx2, rw - 1))
+    if xx2 - xx1 < 20:
+        return None
+    return yy1, yy2, xx1, xx2
+
+
+def _anatomy_limit(boxes, sites):
+    """解剖限高（保留给旧退化路径）：以中切牙段（11/21）框高为基准，
+    尖牙≤1.4×、侧切牙≤1.25×，超高则从下缘裁掉（保留切缘上缘）。"""
+    hc = None
+    for i, (site, x1, y1, x2, y2) in enumerate(boxes):
+        if site in (11, 21):
+            hc = y2 - y1
+            break
+    if not hc or hc <= 0:
+        return boxes
+    out = []
+    for i, (site, x1, y1, x2, y2) in enumerate(boxes):
+        limit = hc * (1.25 if site in (12, 22) else 1.4)
+        if (y2 - y1) > limit:
+            y2 = y1 + int(limit)
+        out.append((site, x1, y1, x2, y2))
+    return out
+
+
+def _seg_y_by_gray(gray: np.ndarray, yy1: int, yy2: int, xx1: int, xx2: int):
+    """行带内该 x 段的灰度行分布 → 框 y 范围（牙齿行最亮，比掩膜行分布鲁棒）"""
+    seg = gray[yy1:yy2 + 1, xx1:xx2].mean(axis=1)
+    peak = seg.max()
+    if peak <= 0:
+        return yy1, yy2
+    m = seg > peak * 0.4
+    ys = np.where(m)[0]
+    if len(ys) < 3:
+        return yy1, yy2
+    return yy1 + int(ys[0]), yy1 + int(ys[-1])
+
+
+_CROWN_RATIO = {11: 1.0, 21: 1.0, 12: 0.82, 22: 0.82, 13: 0.92, 23: 0.92}
+
+
+def _anatomy_boxes(sboxes, sites, band_h):
+    """解剖整形：切缘（框顶）对齐，框高按牙冠长比例（中切1.0/侧切0.82/尖牙0.92）；
+    超高压缩、异常矮补足。"""
+    if not band_h or band_h <= 0:
+        return sboxes
+    out = []
+    for site, x1, y1, x2, y2 in sboxes:
+        target = band_h * _CROWN_RATIO.get(site, 1.0)
+        h = y2 - y1
+        if h > target:
+            y2 = y1 + target
+        elif h < target * 0.6:
+            y2 = y1 + target
+        out.append((site, x1, y1, x2, y2))
+    return out
+
+
+def _teeth_detect_core(roi: np.ndarray, sites=(13, 12, 11, 21, 22, 23),
+                       require_upper: bool = False):
+    """ROI 内牙齿检测核心，返回 [(site, x1,y1,x2,y2)]（ROI 局部坐标）。
+    require_upper=True 时校验牙带中心在 ROI 上部 65% 内（上前牙先验），
+    误检（如下巴/衬衫带）返回 []。"""
+    import cv2
+    mask = _teeth_mask(roi)
+    band = _tooth_band(mask)
+    if band is None:
+        return []
+    yy1, yy2, xx1, xx2 = band
+    if require_upper and (yy1 + yy2) / 2.0 > mask.shape[0] * 0.65:
+        return []
+    # 行带扩展（含牙冠上下缘淡区），灰度窗在其上收紧
+    rh = mask.shape[0]
+    bh = yy2 - yy1
+    yy1e = max(0, yy1 - int(bh * 0.35))
+    yy2e = min(rh - 1, yy2 + int(bh * 0.45))
+    gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
+    boxes = _split_tooth_boxes(mask, xx1, xx2, len(sites))
+    if len(boxes) < len(sites):
+        bb = _ratio_bounds(xx1, xx2, FRONT_TOOTH_RATIOS[:len(sites)])
+        boxes = [(bb[i], float(yy1e), bb[i + 1], float(yy2e)) for i in range(len(sites))]
+    sboxes = []
+    for i, b in enumerate(boxes):
+        if i >= len(sites):
+            break
+        y1, y2 = _seg_y_by_gray(gray, yy1e, yy2e, int(round(b[0])), int(round(b[2])))
+        sboxes.append((sites[i], b[0], float(y1), b[2], float(y2)))
+    return _anatomy_boxes(sboxes, sites, float(yy2e - yy1e))
+
+
+def _try_rois(small, gray, rois, sites, require_upper=True):
+    """依次尝试候选 ROI（先过滤位置不合理的），返回 (roi, boxes) 或 (None, [])"""
+    ih, iw = small.shape[:2]
+    for roi in rois:
+        if roi is None:
+            continue
+        rx1, ry1, rx2, ry2 = roi
+        if rx2 - rx1 < 40 or ry2 - ry1 < 20:
+            continue
+        # 全局位置校验：嘴/牙 ROI 中心不应落在图像底部（Haar 误检下巴/躯干）
+        cy = (ry1 + ry2) / 2.0 / ih
+        if cy > 0.85 or cy < 0.15:
+            continue
+        sub = small[ry1:ry2, rx1:rx2]
+        boxes = _teeth_detect_core(sub, sites, require_upper)
+        if boxes:
+            return roi, boxes
+    return None, []
+
+
+def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
+    """口内牙列自动检测：返回 [(site, x1, y1, x2, y2), ...]（原图像坐标）
+
+    流程：降采样 → 嘴部定位（smile/face/中央回退）→ 双信号牙齿掩膜 →
+    行带定位 → 比例分牙 + 谷吸附 + 解剖限高。"""
     import cv2
     if image is None:
         return []
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    h, w = gray.shape
-    mask = _bright_mask(image)
-
-    if mask.mean() / 255.0 > 0.45:
-        # ---- 白背景照：背景最亮且占大头，脸为低亮主体 ----
-        body = (gray < 215).astype(np.uint8) * 255
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        body = cv2.morphologyEx(body, cv2.MORPH_OPEN, kernel, iterations=2)
-        rowb = body.sum(axis=1) / 255.0
-        if rowb.max() <= 0:
-            return []
-        rb = np.where(rowb > rowb.max() * 0.15)[0]
-        if len(rb) == 0:
-            return []
-        # 牙齿在主体（脸）下部：取下半 50% 起
-        y_top = int(rb[0] + 0.5 * (rb[-1] - rb[0]))
-        y_bot = int(rb[-1])
-        if y_bot - y_top < 20:
-            y_top = int(rb[0])
-        # 牙齿高光：仅在脸掩膜内 > 80 分位亮度（且不低于 175），排除白背景
-        sub_body = body[y_top:y_bot + 1]
-        sub_gray = gray[y_top:y_bot + 1]
-        vals = sub_gray[sub_body > 0]
-        p80 = float(np.percentile(vals, 80)) if vals.size else 175.0
-        tm = ((sub_body > 0) & (sub_gray > max(p80, 175))).astype(np.uint8) * 255
-        tm = cv2.morphologyEx(tm, cv2.MORPH_OPEN, kernel, iterations=2)
-        col = tm.sum(axis=0) / 255.0
-        if col.max() <= 0:
-            # 牙齿高光不足：退回主体宽度
-            col = sub_body.sum(axis=0) / 255.0
-            tm = sub_body
-        # 中央能量带：取包含中央 76% 列能量的区间（排除两侧背景晕影/杂物）
-        csum = np.cumsum(col)
-        total = csum[-1] if csum.size else 0.0
-        if total <= 0:
-            return []
-        xl = int(np.searchsorted(csum, total * 0.12))
-        xr = int(np.searchsorted(csum, total * 0.88))
-        xl = max(0, min(xl, w - 1))
-        xr = max(xl + 1, min(xr, w - 1))
-        if xr - xl < 20:
-            return []
-        boxes = _split_tooth_boxes(tm, xl, xr, len(sites))
-        if len(boxes) < len(sites):
-            # 分牙失败：按前牙宽度比例退化为框
-            bb = _ratio_bounds(xl, xr, FRONT_TOOTH_RATIOS[:len(sites)])
-            boxes = [(bb[i], 0.0, bb[i + 1], float(tm.shape[0] - 1))
-                     for i in range(len(sites))]
-        # 每框 y 用牙齿高光行带约束（贴牙冠）
-        rowt = tm.sum(axis=1) / 255.0
-        rt = np.where(rowt > rowt.max() * 0.15)[0] if rowt.max() > 0 else np.array([])
-        if len(rt) > 0:
-            ty1, ty2 = int(rt[0]), int(rt[-1])
-            return [(sites[i],
-                     max(0.0, b[0]),
-                     float(y_top + ty1 - 4),
-                     min(float(w), b[2]),
-                     float(y_top + ty2 + 4))
-                    for i, b in enumerate(boxes) if i < len(sites)]
-        return [(sites[i], b[0], float(y_top + b[1]), b[2], float(y_top + b[3]))
-                for i, b in enumerate(boxes) if i < len(sites)]
-
-    # ---- 标准牙列照（背景暗/牙列即主体）----
-    rowsum = mask.sum(axis=1) / 255.0
-    rows = np.where(rowsum > rowsum.max() * 0.25)[0] if rowsum.max() > 0 else np.array([])
-    if len(rows) == 0:
+    small, scale = _downscale_teeth(image)
+    h, w = small.shape[:2]
+    gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+    roi = _locate_mouth_roi(gray)
+    rois = [_locate_smile_roi(gray), _locate_face_roi(gray),
+            (int(w * 0.10), int(h * 0.20), int(w * 0.90), int(h * 0.80))]
+    roi, boxes = _try_rois(small, gray, rois, sites, require_upper=True)
+    if not boxes:
         return []
-    y_top, y_bot = int(rows[0]), int(rows[-1])
-    roi_y = mask[y_top:y_bot + 1, :]
-    colsum = roi_y.sum(axis=0) / 255.0
-    k = np.ones(5) / 5.0
-    cs = np.convolve(colsum, k, mode="same")
-    xs = np.where(cs > cs.max() * 0.25)[0] if cs.max() > 0 else np.array([])
-    if len(xs) == 0:
-        return []
-    xl, xr = int(xs[0]), int(xs[-1])
-    boxes = _split_tooth_boxes(mask, xl, xr, len(sites))
-    if len(boxes) < len(sites):
-        # 分牙失败：按前牙宽度比例退化为框
-        bb = _ratio_bounds(xl, xr, FRONT_TOOTH_RATIOS[:len(sites)])
-        boxes = []
-        for i in range(len(sites)):
-            bx1, bx2 = int(round(bb[i])), int(round(bb[i + 1]))
-            seg = mask[y_top:y_bot + 1, bx1:bx2]
-            ys = np.where(seg.sum(axis=1) / 255.0 > 0)
-            if len(ys[0]) == 0:
-                continue
-            lo, hi = np.percentile(ys[0], 8), np.percentile(ys[0], 92)
-            boxes.append((float(bx1), float(y_top + lo - 4), float(bx2), float(y_top + hi + 4)))
-    return [(sites[i], b[0], b[1], b[2], b[3]) for i, b in enumerate(boxes) if i < len(sites)]
+    rx1, ry1, rx2, ry2 = roi
+    if scale == 1.0:
+        return [(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2) for s, x1, y1, x2, y2 in boxes]
+    # 坐标换算回原图
+    inv = 1.0 / scale
+    return [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
+             int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
 
 
 def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
-    """正面视图自动检测：优先 Haar smile 定位嘴部 → 嘴部区域内亮度分牙；
-    无笑脸时回退到图像下半中央区（露齿照也适用）。
-    返回 [(site, x1, y1, x2, y2), ...]（图像坐标）"""
+    """正面视图自动检测：返回 [(site, x1, y1, x2, y2), ...]（原图像坐标）
+    嘴部定位（smile → 脸下1/3 → 下半中央）→ 双信号牙齿掩膜 → 行带分牙。"""
     import cv2
     if image is None:
         return []
-    h, w = image.shape[:2]
-    roi = None
-    ox = oy = 0
-    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    smile = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_smile.xml")
-    smiles = smile.detectMultiScale(gray, 1.7, 18, minSize=(50, 50))
-    if len(smiles) > 0:
-        x, y, rw, rh = max(smiles, key=lambda s: s[2] * s[3])
-        roi = image[y:y + rh, x:x + rw]
-        ox, oy = x, y
-    else:
-        # 回退：下半部中央区域（牙齿通常在笑线/嘴部）
-        rx1, ry1 = int(w * 0.15), int(h * 0.52)
-        rx2, ry2 = int(w * 0.85), int(h * 0.96)
-        if rx2 - rx1 < 60 or ry2 - ry1 < 30:
-            return []
-        roi = image[ry1:ry2, rx1:rx2]
-        ox, oy = rx1, ry1
-    mask = _bright_mask(roi)
-    rw, rh = roi.shape[1], roi.shape[0]
-    boxes = _split_tooth_boxes(mask, 0, rw - 1, len(sites))
-    if len(boxes) < len(sites):
-        # 退化：按前牙宽度比例分配
-        bb = _ratio_bounds(0, rw - 1, FRONT_TOOTH_RATIOS[:len(sites)])
-        boxes = [(bb[i], rh * 0.05, bb[i + 1], rh * 1.05) for i in range(len(sites))]
-    return [(sites[i], ox + b[0], oy + b[1], ox + b[2], oy + b[3]) for i, b in enumerate(boxes)]
+    small, scale = _downscale_teeth(image)
+    h, w = small.shape[:2]
+    gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+    rois = [_locate_smile_roi(gray), _locate_face_roi(gray),
+            (int(w * 0.15), int(h * 0.45), int(w * 0.85), int(h * 0.78))]
+    roi, boxes = _try_rois(small, gray, rois, sites, require_upper=True)
+    if not boxes:
+        return []
+    rx1, ry1, rx2, ry2 = roi
+    if scale == 1.0:
+        return [(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2) for s, x1, y1, x2, y2 in boxes]
+    inv = 1.0 / scale
+    return [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
+             int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
