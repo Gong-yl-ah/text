@@ -91,6 +91,7 @@ class DrawableRect:
         pen = QPen(self.color, 1.5)
         pen.setStyle(Qt.SolidLine)
         painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)      # 框内不填充（否则上一颗牙的控制点画刷会漏过来，把框涂实）
         painter.drawRect(r)
         # 八个控制点
         points = [

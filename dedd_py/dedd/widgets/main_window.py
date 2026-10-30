@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._build_toolbar()
         self._build_tabs()
+        self._apply_toolbar(None)
         self.statusBar().showMessage("新建项目后开始设计")
 
         self._current_tab = 0
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
         tb = QToolBar("工具", self)
         tb.setMovable(False)
         self.addToolBar(tb)
+        self.toolbar = tb
         self.act_face = QAction(C.FACE_ANALYSIS, self)
         self.act_detect = QAction(C.AI_DETECTION, self)
         self.act_export = QAction(C.EXPORT_TO_FILE, self)
@@ -118,24 +120,9 @@ class MainWindow(QMainWindow):
         self.act_onestep = QAction("一键完成", self)
         self.act_onestep.setToolTip(
             "载入照片后：自动检测两视图牙位 → 进入美学设计 → 自动优化\n（之后只需微调即可导出）")
-        tb.addAction(self.act_onestep)
-        tb.addSeparator()
-        for a in (self.act_face, self.act_detect, self.act_export, self.act_import_photo_tb):
-            tb.addAction(a)
-        tb.addAction(self.act_export_all)
-        tb.addSeparator()
-        tb.addAction(self.act_undo)
-        tb.addAction(self.act_redo)
-        tb.addSeparator()
-        tb.addAction(self.act_auto)
-        tb.addAction(self.act_regen)
-        tb.addSeparator()
         self.act_sym = QAction("中轴线", self)
         self.act_mirror = QAction("镜像复制", self)
         self.act_esthetics = QAction("美学参数", self)
-        tb.addAction(self.act_sym)
-        tb.addAction(self.act_mirror)
-        tb.addAction(self.act_esthetics)
         self.act_face.triggered.connect(self.face_analysis)
         self.act_detect.triggered.connect(self.detect_teeth)
         self.act_onestep.triggered.connect(self.one_click_flow)
@@ -173,6 +160,42 @@ class MainWindow(QMainWindow):
         self.welcome.open_requested.connect(self.open_project)
         self.welcome.sample_requested.connect(self.open_sample_project)
 
+    # ---------- 工具栏按流程分发 ----------
+    def _toolbar_groups(self, tab_index: int):
+        """每个步骤只显示这一步用得上的按钮（每组之间自动加分隔线）"""
+        if tab_index == 0:          # 编辑照片
+            return [[self.act_onestep],
+                    [self.act_import_photo_tb, self.act_face]]
+        if tab_index in (1, 2):     # 平行合平面 / 标记唇线（旋转、画点都在面板与图上完成）
+            return [[self.act_undo, self.act_redo]]
+        if tab_index == 3:          # 标记牙位
+            return [[self.act_detect],
+                    [self.act_undo, self.act_redo],
+                    [self.act_sym, self.act_mirror]]
+        if tab_index == 4:          # 美学设计
+            return [[self.act_auto, self.act_regen],
+                    [self.act_undo, self.act_redo],
+                    [self.act_sym, self.act_mirror, self.act_esthetics],
+                    [self.act_onestep]]
+        if tab_index == 5:          # 导出设计
+            return [[self.act_export, self.act_export_all]]
+        return []
+
+    def _apply_toolbar(self, tab_index):
+        """按当前步骤重排工具栏；tab_index=None 表示没打开工程（引导页）"""
+        tb = getattr(self, "toolbar", None)
+        if tb is None:
+            return
+        tb.clear()
+        if tab_index is None:
+            tb.addAction(self.act_import_photo_tb)
+            return
+        for i, group in enumerate(self._toolbar_groups(tab_index)):
+            if i:
+                tb.addSeparator()
+            for a in group:
+                tb.addAction(a)
+
     def _clear_workspace_widgets(self):
         """移除当前项目的视图（保留启动引导页）"""
         for w in (self.workspace, self.result_panel):
@@ -196,6 +219,7 @@ class MainWindow(QMainWindow):
         self._tab_enabled = True
         self.tabs.setCurrentIndex(0)
         self.workspace.enter_edit()
+        self._apply_toolbar(0)
         # 修改即标记未保存 + 标记快照
         for panel in (self.workspace.base_panel, self.workspace.front_panel):
             panel.image_view.mouseDoubleClickEvent = lambda e, p=panel: self._load_photo(p)
@@ -451,6 +475,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.welcome)
         self.tabs.setEnabled(False)
         self._tab_enabled = False
+        self._apply_toolbar(None)
         self.act_save.setEnabled(False)
         self.act_close.setEnabled(False)
         self.act_export_all.setEnabled(False)
@@ -505,6 +530,7 @@ class MainWindow(QMainWindow):
         if not self._tab_enabled or self.workspace is None:
             return
         self._current_tab = index
+        self._apply_toolbar(index)
         labels = (C.TAB_EDIT, C.TAB_UNIFY, C.TAB_MARK_LIP, C.TAB_MARK_TEETH,
                   C.TAB_ADJUST, C.TAB_EXPORT)
         label = labels[index]
