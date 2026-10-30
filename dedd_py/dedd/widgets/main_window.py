@@ -26,6 +26,7 @@ from ..models import BasicInfo, ProjData, ToothData, mirror_teeth
 from ..project_io import import_depx, load_project, save_project
 from .new_project_dialog import NewProjectDialog
 from .result_panel import ResultPanel
+from .welcome_panel import WelcomePanel
 from .work_panel import VIEW_BASE, VIEW_FRONT
 from .work_space import WorkSpace
 
@@ -111,6 +112,11 @@ class MainWindow(QMainWindow):
         self.act_detect = QAction(C.AI_DETECTION, self)
         self.act_export = QAction(C.EXPORT_TO_FILE, self)
         self.act_import_photo_tb = QAction(C.IMPORT_PHOTO, self)
+        self.act_onestep = QAction("一键完成", self)
+        self.act_onestep.setToolTip(
+            "载入照片后：自动检测两视图牙位 → 进入美学设计 → 自动优化\n（之后只需微调即可导出）")
+        tb.addAction(self.act_onestep)
+        tb.addSeparator()
         for a in (self.act_face, self.act_detect, self.act_export, self.act_import_photo_tb):
             tb.addAction(a)
         tb.addSeparator()
@@ -128,6 +134,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_esthetics)
         self.act_face.triggered.connect(self.face_analysis)
         self.act_detect.triggered.connect(self.detect_teeth)
+        self.act_onestep.triggered.connect(self.one_click_flow)
         self.act_export.triggered.connect(self.save_design_to_file)
         self.act_import_photo_tb.triggered.connect(self.import_photo)
         self.act_sym.triggered.connect(self.toggle_sym_axis)
@@ -136,6 +143,7 @@ class MainWindow(QMainWindow):
         self.act_sym.setEnabled(False)
         self.act_mirror.setEnabled(False)
         self.act_esthetics.setEnabled(False)
+        self.act_onestep.setEnabled(False)
         self._est_dlg = None
 
     def _build_tabs(self):
@@ -153,13 +161,27 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(QWidget(), label)
         self.tabs.setEnabled(False)
 
+        # 启动引导页（没有项目时显示，避免一片空白无从下手）
+        self.welcome = WelcomePanel(self)
+        self.stack.addWidget(self.welcome)
+        self.stack.setCurrentWidget(self.welcome)
+        self.welcome.new_requested.connect(self.new_project)
+        self.welcome.open_requested.connect(self.open_project)
+        self.welcome.sample_requested.connect(self.open_sample_project)
+
+    def _clear_workspace_widgets(self):
+        """移除当前项目的视图（保留启动引导页）"""
+        for w in (self.workspace, self.result_panel):
+            if w is not None:
+                self.stack.removeWidget(w)
+                w.deleteLater()
+        self.workspace = None
+        self.result_panel = None
+
     # ---------- 项目生命周期 ----------
     def _new_workspace(self):
-        # 清理旧内容
-        while self.stack.count() > 0:
-            w = self.stack.widget(0)
-            self.stack.removeWidget(w)
-            w.deleteLater()
+        # 清理旧内容（保留引导页）
+        self._clear_workspace_widgets()
         self.workspace = WorkSpace(self)
         self.result_panel = ResultPanel(self)
         self.stack.addWidget(self.workspace)
@@ -185,6 +207,7 @@ class MainWindow(QMainWindow):
         self.act_sym.setEnabled(True)
         self.act_mirror.setEnabled(True)
         self.act_esthetics.setEnabled(True)
+        self.act_onestep.setEnabled(True)
         self.act_export.setEnabled(False)
         self.statusBar().showMessage("点『载入照片』按钮或双击图像区域载入照片（左=正面视图，右=口内视图）")
         self.dirty = False
@@ -207,6 +230,29 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, C.OPEN, "", f"DEDD工程 (*.{C.PROJ_FILE_SUFFIX});;原版工程 (*.{C.DEPX_SUFFIX})")
         if not path:
             return
+        self._load_project_path(path)
+
+    def open_sample_project(self):
+        """打开随程序附带的示例工程，便于第一次上手
+
+        示例工程按“只读模板”处理：保存时会要求另存为新文件，避免把
+        随程序附带的示例改坏。
+        """
+        here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        sample = os.path.join(here, f"示例工程.{C.PROJ_FILE_SUFFIX}")
+        if not os.path.exists(sample):
+            QMessageBox.information(self, "打开示例工程", f"没找到示例工程：\n{sample}")
+            return
+        if not self._confirm_save_if_dirty():
+            return
+        self._load_project_path(sample)
+        if self.workspace is not None:
+            self.proj_file = None          # 模板：保存时另存
+            self.dirty = False
+            self.statusBar().showMessage("已打开示例工程（模板，保存时会让你另存为新文件）", 6000)
+
+    def _load_project_path(self, path: str):
+        """读取工程（.deddp）或原版工程（.depx）并填入界面"""
         try:
             if path.lower().endswith(f".{C.DEPX_SUFFIX}"):
                 proj, base_img, front_img = import_depx(path)
@@ -267,7 +313,15 @@ class MainWindow(QMainWindow):
 
     def save_project(self):
         if self.proj_file is None:
-            return
+            # 示例工程等“模板”场景：保存时先问存到哪里
+            path, _ = QFileDialog.getSaveFileName(
+                self, C.SAVE, f"{C.UNNAMED}.{C.PROJ_FILE_SUFFIX}",
+                f"DEDD工程 (*.{C.PROJ_FILE_SUFFIX})")
+            if not path:
+                return
+            if not path.lower().endswith(f".{C.PROJ_FILE_SUFFIX}"):
+                path += f".{C.PROJ_FILE_SUFFIX}"
+            self.proj_file = path
         proj = self._collect_proj()
         base_img = self.workspace.base_panel.render_pre_np()
         front_img = self.workspace.front_panel.render_pre_np()
@@ -362,12 +416,8 @@ class MainWindow(QMainWindow):
         self.dirty = True
 
     def _close_workspace(self, silent=False):
-        while self.stack.count() > 0:
-            w = self.stack.widget(0)
-            self.stack.removeWidget(w)
-            w.deleteLater()
-        self.workspace = None
-        self.result_panel = None
+        self._clear_workspace_widgets()
+        self.stack.setCurrentWidget(self.welcome)
         self.tabs.setEnabled(False)
         self._tab_enabled = False
         self.act_save.setEnabled(False)
@@ -377,6 +427,7 @@ class MainWindow(QMainWindow):
         self.act_sym.setEnabled(False)
         self.act_mirror.setEnabled(False)
         self.act_esthetics.setEnabled(False)
+        self.act_onestep.setEnabled(False)
         self.act_export.setEnabled(False)
         self.act_auto.setEnabled(False)
         self.act_regen.setEnabled(False)
@@ -515,13 +566,15 @@ class MainWindow(QMainWindow):
         except Exception as ex:
             QMessageBox.warning(self, C.FACE_ANALYSIS, f"{C.ERROR}: {ex}")
 
-    def detect_teeth(self):
+    def detect_teeth(self, checked=False, silent: bool = False):
         """AI 检测（本地启发式增强）：
         口内视图：亮度分割 + 牙间谷分牙自动生成 6 个牙位框；
         正面视图：Haar 嘴部定位 + 亮度分牙自动生成 6 个牙位框。
-        两个视图各自独立检测，已有图则生成；结果需手动微调。"""
+        两个视图各自独立检测，已有图则生成；结果需手动微调。
+        返回 {"base": 口内框数, "front": 正面框数}。"""
+        counts = {"base": 0, "front": 0}
         if self.workspace is None:
-            return
+            return counts
         from ..optimizer import detect_teeth_intraoral, detect_teeth_front
         done = []
         # 口内视图
@@ -531,6 +584,7 @@ class MainWindow(QMainWindow):
             if boxes:
                 bp.set_marked_teeth([ToothData(site=s, x1=a, y1=b, x2=c, y2=d, length=0)
                                      for s, a, b, c, d in boxes])
+                counts["base"] = len(boxes)
                 done.append("口内")
         # 正面视图
         fp = self.workspace.front_panel
@@ -539,16 +593,56 @@ class MainWindow(QMainWindow):
             if boxes:
                 fp.set_marked_teeth([ToothData(site=s, x1=a, y1=b, x2=c, y2=d, length=0)
                                      for s, a, b, c, d in boxes])
+                counts["front"] = len(boxes)
                 done.append("正面")
         if not done:
-            QMessageBox.information(self, C.AI_DETECTION,
-                                    "未检测到可识别的牙列区域：\n"
-                                    "口内照请拍摄上颌前牙清晰正面照（牙齿亮、对焦准）；\n"
-                                    "正面照请保持露齿微笑。也可以手动标记牙位。")
-            return
+            if not silent:
+                QMessageBox.information(self, C.AI_DETECTION,
+                                        "未检测到可识别的牙列区域：\n"
+                                        "口内照请拍摄上颌前牙清晰正面照（牙齿亮、对焦准）；\n"
+                                        "正面照请保持露齿微笑。也可以手动标记牙位。")
+            return counts
         self.workspace.record_mark_snapshot()
+        self.dirty = True
         self.statusBar().showMessage(
             f"AI检测完成：{'、'.join(done)}视图已生成牙位框，请手动微调", 4000)
+        return counts
+
+    def one_click_flow(self, checked=False):
+        """一键完成：两视图自动 AI 检测 → 进入『美学设计』→ 自动优化
+
+        之后只剩微调与导出，省掉六步里手动来回切标签的操作。
+        """
+        if self.workspace is None:
+            return
+        has_base = self.workspace.base_panel.has_image()
+        has_front = self.workspace.front_panel.has_image()
+        if not has_base and not has_front:
+            QMessageBox.information(
+                self, "一键完成",
+                "还没有照片。请双击左边视图载入正面照、右边视图载入口内照，再点『一键完成』。")
+            return
+        counts = self.detect_teeth(silent=True)
+        if not counts["base"] and not counts["front"]:
+            QMessageBox.information(
+                self, "一键完成",
+                "AI 没能识别出牙列，已为你切到『标记牙位』步骤，可手动拖框标记。\n"
+                "（口内照要牙齿亮、对焦准；正面照请露齿微笑）")
+            self.tabs.setCurrentIndex(3)
+            return
+        # 进入美学设计（会自动把刚检测到的牙位同步进调整面板）
+        self.tabs.setCurrentIndex(4)
+        self.act_auto.setEnabled(True)
+        self.act_regen.setEnabled(True)
+        try:
+            self.workspace.auto_adjust()
+        except Exception as ex:  # 优化失败不应阻断流程
+            self.statusBar().showMessage(f"自动优化跳过：{ex}", 5000)
+            return
+        self.dirty = True
+        self.statusBar().showMessage(
+            f"一键完成：口内 {counts['base']} 框、正面 {counts['front']} 框，已自动优化。"
+            "可微调后到『导出设计』保存。", 9000)
 
     def save_design_to_file(self):
         if self.result_panel is None:
