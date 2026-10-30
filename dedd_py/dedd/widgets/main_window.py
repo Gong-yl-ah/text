@@ -62,20 +62,23 @@ class MainWindow(QMainWindow):
         self.act_save = QAction(C.SAVE, self)
         self.act_import = QAction(C.IMPORT_DEPX, self)
         self.act_import_photo = QAction(C.IMPORT_PHOTO, self)
+        self.act_export_all = QAction("导出全部图（设计图 / 两向对比 / 总图）", self)
         self.act_close = QAction(C.CLOSE, self)
         self.act_exit = QAction(C.EXIT, self)
         for a in (self.act_new, self.act_open, self.act_save, self.act_import,
-                  self.act_import_photo, self.act_close, self.act_exit):
+                  self.act_import_photo, self.act_export_all, self.act_close, self.act_exit):
             m_file.addAction(a)
         self.act_new.triggered.connect(self.new_project)
         self.act_open.triggered.connect(self.open_project)
         self.act_save.triggered.connect(self.save_project)
         self.act_import.triggered.connect(self.import_depx)
         self.act_import_photo.triggered.connect(self.import_photo)
+        self.act_export_all.triggered.connect(self.export_all_images)
         self.act_close.triggered.connect(self.close_project)
         self.act_exit.triggered.connect(self.close)
         self.act_save.setEnabled(False)
         self.act_close.setEnabled(False)
+        self.act_export_all.setEnabled(False)
 
         m_edit = mb.addMenu(C.MENU_EDIT)
         self.act_undo = QAction(C.UNDO, self)
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         for a in (self.act_face, self.act_detect, self.act_export, self.act_import_photo_tb):
             tb.addAction(a)
+        tb.addAction(self.act_export_all)
         tb.addSeparator()
         tb.addAction(self.act_undo)
         tb.addAction(self.act_redo)
@@ -204,6 +208,7 @@ class MainWindow(QMainWindow):
         self.workspace.reset_history()
         self.act_save.setEnabled(True)
         self.act_close.setEnabled(True)
+        self.act_export_all.setEnabled(True)
         self.act_face.setEnabled(True)
         self.act_detect.setEnabled(True)
         self.act_sym.setEnabled(True)
@@ -448,6 +453,7 @@ class MainWindow(QMainWindow):
         self._tab_enabled = False
         self.act_save.setEnabled(False)
         self.act_close.setEnabled(False)
+        self.act_export_all.setEnabled(False)
         self.act_face.setEnabled(False)
         self.act_detect.setEnabled(False)
         self.act_sym.setEnabled(False)
@@ -678,31 +684,53 @@ class MainWindow(QMainWindow):
             f"一键完成：口内 {counts['base']} 框、正面 {counts['front']} 框，已自动优化。"
             "可微调后到『导出设计』保存。", 9000)
 
+    def _export_stem(self) -> str:
+        from datetime import date
+        name = (self.basic_info.name or "").strip() or C.UNNAMED
+        return f"{name}_{date.today().strftime('%Y%m%d')}"
+
     def save_design_to_file(self):
-        if self.result_panel is None:
+        """保存设计图：按原始图像分辨率合成（不再截界面，窗口再小也不糊）"""
+        if self.result_panel is None or self.workspace is None:
             return
-        path, _ = QFileDialog.getSaveFileName(self, C.EXPORT_TO_FILE, "design.jpg", "图片 (*.jpg)")
+        default = os.path.join(os.path.expanduser("~/Documents"), f"{self._export_stem()}_设计图.jpg")
+        path, _ = QFileDialog.getSaveFileName(self, C.EXPORT_TO_FILE, default, "图片 (*.jpg)")
         if not path:
             return
         if not path.lower().endswith(".jpg"):
             path += ".jpg"
         try:
-            from PIL import Image as PILImage
-            from PySide6.QtGui import QPixmap
-            # 渲染结果面板完整内容（含滚动区外部分），避免导出图被截断
-            root = self.result_panel.widget()
-            if root is None:
-                return
-            pm = QPixmap(root.size())
-            pm.fill(Qt.white)
-            root.render(pm)
-            img = pm.toImage()
-            buf = qimage_bytes(img)
-            arr = np.frombuffer(buf, np.uint8).reshape(img.height(), img.width(), 4)
-            PILImage.fromarray(arr[:, :, :3]).save(path, "JPEG", quality=92)
-            self.statusBar().showMessage(f"设计图已保存：{path}", 4000)
+            from ..export_render import export_design_only
+            out = export_design_only(self.workspace, self.basic_info, path)
+            if out:
+                self.statusBar().showMessage(f"设计图已保存（原图分辨率）：{out}", 6000)
         except Exception as ex:
             QMessageBox.warning(self, C.ERROR, f"保存失败：{ex}")
+
+    def export_all_images(self):
+        """一键导出：设计图 + 口内对比 + 正面对比 + 总图（文件名带患者名与日期）"""
+        if self.workspace is None:
+            QMessageBox.information(self, "导出全部图", "请先打开或新建工程。")
+            return
+        out_dir = QFileDialog.getExistingDirectory(self, "选择导出目录",
+                                                   os.path.expanduser("~/Documents"))
+        if not out_dir:
+            return
+        try:
+            from ..export_render import export_case
+            files = export_case(self.workspace, self.basic_info, out_dir,
+                                stem=self._export_stem())
+        except Exception as ex:
+            QMessageBox.warning(self, C.ERROR, f"导出失败：{ex}")
+            return
+        if not files:
+            QMessageBox.information(self, "导出全部图", "当前工程没有可导出的图像（两张视图都没载入照片）。")
+            return
+        self.statusBar().showMessage(f"已导出 {len(files)} 张图：{out_dir}", 9000)
+        QMessageBox.information(self, "导出全部图",
+                                "已按原图分辨率导出：\n" +
+                                "\n".join(os.path.basename(f) for f in files) +
+                                f"\n\n目录：{out_dir}")
 
     def _show_about(self):
         QMessageBox.about(self, C.ABOUT,
