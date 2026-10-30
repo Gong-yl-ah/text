@@ -197,9 +197,11 @@ class MainWindow(QMainWindow):
             panel.image_view.mouseDoubleClickEvent = lambda e, p=panel: self._load_photo(p)
             panel.on_load_photo = self._load_photo
             panel.on_teeth_cleared = lambda: self._on_teeth_cleared()
-            panel.mark_panel.on_change = self.workspace._mark_changed
-            panel.adjust_panel.on_change = lambda: setattr(self, "dirty", True)
+            panel.mark_panel.on_change = self._on_mark_changed
+            panel.adjust_panel.on_change = self._on_adjust_changed
+            panel.adjust_panel.on_status = self._show_teeth_status
             panel.lip_panel.on_change = lambda: setattr(self, "dirty", True)
+        self.workspace.reset_history()
         self.act_save.setEnabled(True)
         self.act_close.setEnabled(True)
         self.act_face.setEnabled(True)
@@ -282,6 +284,9 @@ class MainWindow(QMainWindow):
             self.workspace.set_lip_upper_points(proj.lip_upper_points)
             self.workspace.set_lip_upper_closed(proj.lip_upper_closed)
         self.workspace.set_sym_axis(proj.sym_axis)
+        self.workspace.reset_history()
+        self.act_undo.setEnabled(True)
+        self.act_redo.setEnabled(True)
         self._update_info_bar()
         self.statusBar().showMessage(f"已打开：{os.path.basename(path)}")
 
@@ -415,6 +420,27 @@ class MainWindow(QMainWindow):
             self.workspace.record_mark_snapshot()
         self.dirty = True
 
+    def _on_mark_changed(self):
+        """标记牙位变化：记一步撤销 + 标记未保存"""
+        self.dirty = True
+        if self.workspace is not None:
+            self.workspace._mark_changed()
+        self.act_undo.setEnabled(True)
+
+    def _on_adjust_changed(self):
+        """美学设计面板变化（拖动/缩放/亮度黄度/切换显示）：同样可撤销"""
+        self.dirty = True
+        if self.workspace is not None:
+            self.workspace.mark_changed()
+        self.act_undo.setEnabled(True)
+
+    def _show_teeth_status(self, text: str):
+        """选中牙时的状态栏读数"""
+        if text:
+            self.statusBar().showMessage(text)
+        else:
+            self._update_info_bar()
+
     def _close_workspace(self, silent=False):
         self._clear_workspace_widgets()
         self.stack.setCurrentWidget(self.welcome)
@@ -490,6 +516,8 @@ class MainWindow(QMainWindow):
             self.workspace.enter_adjust()
             self.act_auto.setEnabled(True)
             self.act_regen.setEnabled(True)
+            self.act_undo.setEnabled(True)
+            self.act_redo.setEnabled(True)
         elif label == C.TAB_EXPORT:
             self._show_export()
             self.stack.setCurrentWidget(self.result_panel)
@@ -516,12 +544,18 @@ class MainWindow(QMainWindow):
 
     # ---------- 操作 ----------
     def _undo(self):
-        if self.workspace:
-            self.workspace.undo()
+        if self.workspace and self.workspace.undo():
+            self.dirty = True
+            self.act_redo.setEnabled(True)
+            self._show_teeth_status("")
+            self.statusBar().showMessage("已撤销", 1500)
 
     def _redo(self):
-        if self.workspace:
-            self.workspace.redo()
+        if self.workspace and self.workspace.redo():
+            self.dirty = True
+            self.act_undo.setEnabled(True)
+            self._show_teeth_status("")
+            self.statusBar().showMessage("已重做", 1500)
 
     def auto_adjust(self):
         if self.workspace:

@@ -82,17 +82,27 @@ class TeethAdjustPanel(QWidget):
         self._yellow_now = 0
         self._hover = False
         self._sym_drag = False      # 正在拖动中轴线
+        # —— 选中 / 键盘微调 / 状态栏读数 ——
+        self.sel_index = -1         # 当前选中的牙（-1 = 未选中）
+        self.on_status = None       # 状态栏文本回调（str）
+        self._aspect = 1.0          # 拖拽起始宽高比（Shift 等比缩放用）
+        self._orig_view = (0.0, 0.0, 0.0, 0.0)
+        self.setFocusPolicy(Qt.StrongFocus)
 
     # ---------- 数据 ----------
     def clear(self):
         self.items.clear()
+        self.sel_index = -1
         self.update()
 
     def set_teeth(self, data: List[ToothData]):
+        keep_sel = self.sel_index
         self.clear()
         for td in data:
             self.items.append(ToothItem(Tooth(td.site, td.rect, td.length)))
         self._refresh_images()
+        if 0 <= keep_sel < len(self.items):
+            self.sel_index = keep_sel       # 重建后保持选中（撤销/重做/自动优化后继续微调）
         self.update()
 
     def get_current_teeth_data(self) -> List[ToothData]:
@@ -108,6 +118,94 @@ class TeethAdjustPanel(QWidget):
     def _notify(self):
         if self.on_change:
             self.on_change()
+
+    # ---------- 选中 / 读数 / 键盘微调 ----------
+    def selected_item(self):
+        if 0 <= self.sel_index < len(self.items):
+            return self.items[self.sel_index]
+        return None
+
+    def select(self, index: int):
+        self.sel_index = index if 0 <= index < len(self.items) else -1
+        self._emit_status()
+        self.update()
+
+    def _emit_status(self):
+        it = self.selected_item()
+        if it is None:
+            if self.on_status:
+                self.on_status("")
+            return
+        r = it.rect_img
+        w, h = r.width, r.height
+        scale = it.scale()                      # mm / px
+        w_mm = w * scale
+        ratio = (w_mm / it.real_length) if it.real_length else 0.0
+        txt = (f"选中牙位 {it.site}　x={r.x1:.0f} y={r.y1:.0f}　{w:.0f}×{h:.0f} px"
+               f"　冠长 {it.real_length:.1f} mm　宽长比 {ratio:.2f}"
+               f"　（←↑→↓ 微移，Shift 加速；[ ] 调宽；- = 调高）")
+        if self.on_status:
+            self.on_status(txt)
+
+    def _after_keyboard_edit(self):
+        self._emit_status()
+        self._notify()
+        self.update()
+
+    def nudge(self, dx: float, dy: float):
+        """按图像像素微调选中的牙（不做相邻联动，便于精修）"""
+        it = self.selected_item()
+        if it is None:
+            return
+        r = it.rect_img
+        it.rect_img = Rect2D(r.x1 + dx, r.y1 + dy, r.x2 + dx, r.y2 + dy).normalized()
+        self._after_keyboard_edit()
+
+    def grow(self, dw: float = 0.0, dh: float = 0.0):
+        """以中心为基准改宽/高（图像像素，负值收紧）"""
+        it = self.selected_item()
+        if it is None:
+            return
+        r = it.rect_img
+        cx, cy = (r.x1 + r.x2) / 2.0, (r.y1 + r.y2) / 2.0
+        hw = max(2.0, (r.width + dw) / 2.0)
+        hh = max(2.0, (r.height + dh) / 2.0)
+        it.rect_img = Rect2D(cx - hw, cy - hh, cx + hw, cy + hh)
+        self._after_keyboard_edit()
+
+    def keyPressEvent(self, e):
+        it = self.selected_item()
+        if it is None:
+            super().keyPressEvent(e)
+            return
+        step = 10.0 if (e.modifiers() & Qt.ShiftModifier) else 1.0
+        key = e.key()
+        if key == Qt.Key_Left:
+            self.nudge(-step, 0)
+        elif key == Qt.Key_Right:
+            self.nudge(step, 0)
+        elif key == Qt.Key_Up:
+            self.nudge(0, -step)
+        elif key == Qt.Key_Down:
+            self.nudge(0, step)
+        elif key == Qt.Key_BracketLeft:
+            self.grow(-2 * step, 0)
+        elif key == Qt.Key_BracketRight:
+            self.grow(2 * step, 0)
+        elif key == Qt.Key_Minus:
+            self.grow(0, -2 * step)
+        elif key == Qt.Key_Equal:
+            self.grow(0, 2 * step)
+        elif key == Qt.Key_Tab:
+            # 在牙之间循环切换选中
+            if self.items:
+                self.select((self.sel_index + 1) % len(self.items))
+        elif key == Qt.Key_Escape:
+            self.select(-1)
+        else:
+            super().keyPressEvent(e)
+            return
+        e.accept()
 
     # ---------- 模板与亮度 ----------
     def _kind(self) -> str:
@@ -235,6 +333,7 @@ class TeethAdjustPanel(QWidget):
                 return
             self._start = p
             self._flag = POINT_OUT_RECT
+            self.setFocus(Qt.MouseFocusReason)
             for i, it in enumerate(self.items):
                 vx1, vy1, vx2, vy2 = self._to_view(it.rect_img)
                 f = self._rect_flag(it, vx1, vy1, vx2, vy2, p)
@@ -245,7 +344,12 @@ class TeethAdjustPanel(QWidget):
                     self._p2 = QPointF(vx2, vy2)
                     self._p3 = QPointF(vx2, vy1)
                     self._p4 = QPointF(vx1, vy2)
+                    self._orig_view = (vx1, vy1, vx2, vy2)
+                    self._aspect = ((vx2 - vx1) / (vy2 - vy1)) if (vy2 - vy1) else 1.0
+                    self.select(i)
                     break
+            else:
+                self.select(-1)
         super().mousePressEvent(e)
 
     @staticmethod
@@ -274,15 +378,29 @@ class TeethAdjustPanel(QWidget):
                     self.bright = new_b
                     self.yellow = new_y
                     self._apply_bright_yellow()
-                    self._notify()
+                    self._emit_status()
                     self.update()
             return
         if e.buttons() & Qt.LeftButton and self._drag_index != -1 and self.dragable:
             it = self.items[self._drag_index]
             x1, y1, x2, y2 = self._to_view(it.rect_img)
             s = self._start
+            corner = self._flag in (POINT_NW, POINT_NE, POINT_SW, POINT_SE)
             if self._flag == POINT_OUT_RECT:
                 pass  # 不应出现
+            elif corner and (e.modifiers() & Qt.ShiftModifier) and self._aspect > 0:
+                # Shift + 角落拖拽：等比缩放，锚定对角不动
+                ox1, oy1, ox2, oy2 = self._orig_view
+                ax = ox2 if self._flag in (POINT_NW, POINT_SW) else ox1
+                ay = oy2 if self._flag in (POINT_NW, POINT_NE) else oy1
+                dxs = 1.0 if p.x() >= ax else -1.0
+                dys = 1.0 if p.y() >= ay else -1.0
+                w = max(4.0, abs(p.x() - ax))
+                h = max(4.0, w / self._aspect)
+                self._set_item_rect_view(it, ax, ay, ax + dxs * w, ay + dys * h)
+                self._emit_status()
+                self.update()
+                return
             elif self._flag == POINT_NW:
                 x1, y1 = p.x(), p.y()
             elif self._flag == POINT_NE:
@@ -305,7 +423,13 @@ class TeethAdjustPanel(QWidget):
                 self._start = p
                 self.update()
                 return
+            # 最小尺寸保护（视图坐标至少 4px，避免拖成一条线看不见）
+            if abs(x2 - x1) < 4:
+                x2 = x1 + 4 if x2 >= x1 else x1 - 4
+            if abs(y2 - y1) < 4:
+                y2 = y1 + 4 if y2 >= y1 else y1 - 4
             self._set_item_rect_view(it, x1, y1, x2, y2)
+            self._emit_status()
             self.update()
         else:
             # 光标
@@ -397,35 +521,47 @@ class TeethAdjustPanel(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        for it in self.items:
-            if self.mode == MODE_NONE:
-                continue
+        for i, it in enumerate(self.items):
             vx1, vy1, vx2, vy2 = self._to_view(it.rect_img)
             if vx2 - vx1 < 2 or vy2 - vy1 < 2:
                 continue
             rect = _QRectF(vx1, vy1, vx2 - vx1, vy2 - vy1)
-            img = it.tmp_image if (it.tmp_image is not None and (self.mode == MODE_REAL or self.view_kind == "front")) else None
-            if img is None and (self.mode == MODE_REAL or self.view_kind == "front"):
-                img = it.image
-            if self.mode == MODE_CONTOUR or self.view_kind == "front":
-                img = it.image if it.image is not None else None
-            if img is not None:
-                painter.drawImage(rect, img)
-            if self.mode == MODE_CONTOUR and self.show_border_text:
-                pen = QPen(QColor(0, 170, 255), 1.5)
-                painter.setPen(pen)
+            if self.mode != MODE_NONE:
+                img = it.tmp_image if (it.tmp_image is not None and (self.mode == MODE_REAL or self.view_kind == "front")) else None
+                if img is None and (self.mode == MODE_REAL or self.view_kind == "front"):
+                    img = it.image
+                if self.mode == MODE_CONTOUR or self.view_kind == "front":
+                    img = it.image if it.image is not None else None
+                if img is not None:
+                    painter.drawImage(rect, img)
+                if self.mode == MODE_CONTOUR and self.show_border_text:
+                    pen = QPen(QColor(0, 170, 255), 1.5)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(rect)
+                    painter.setPen(QPen(QColor(255, 255, 0), 1))
+                    font = painter.font()
+                    font.setPointSize(9)
+                    painter.setFont(font)
+                    label = str(it.site)
+                    fm = painter.fontMetrics()
+                    tw = fm.horizontalAdvance(label)
+                    tx = rect.x() + (rect.width() - tw) / 2
+                    ty = rect.y() - 4
+                    painter.drawText(QPointF(tx, ty), label)
+            # 选中框：橙色虚线 + 尺寸角标
+            if i == self.sel_index:
+                sel_pen = QPen(QColor(255, 150, 0), 2.0)
+                sel_pen.setStyle(Qt.DashLine)
+                painter.setPen(sel_pen)
                 painter.setBrush(Qt.NoBrush)
-                painter.drawRect(rect)
-                painter.setPen(QPen(QColor(255, 255, 0), 1))
+                painter.drawRect(rect.adjusted(-2, -2, 2, 2))
                 font = painter.font()
-                font.setPointSize(9)
+                font.setPointSize(8)
                 painter.setFont(font)
-                label = str(it.site)
-                fm = painter.fontMetrics()
-                tw = fm.horizontalAdvance(label)
-                tx = rect.x() + (rect.width() - tw) / 2
-                ty = rect.y() - 4
-                painter.drawText(QPointF(tx, ty), label)
+                painter.setPen(QPen(QColor(255, 190, 60), 1))
+                painter.drawText(QPointF(rect.x(), rect.bottom() + 12),
+                                 f"{it.site} {it.rect_img.width:.0f}×{it.rect_img.height:.0f}")
         self._draw_sym(painter)
         painter.end()
 

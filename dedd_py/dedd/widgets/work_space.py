@@ -31,9 +31,10 @@ class WorkSpace(QWidget):
         lay.addWidget(self.front_panel, 1)
         lay.addWidget(self.base_panel, 1)
 
-        # 撤销/重做快照（标记牙位数据）
+        # 撤销/重做快照（标记 + 调整，统一状态）
         self._undo_stack: List[dict] = []
         self._redo_stack: List[dict] = []
+        self._last_state: Optional[dict] = None
 
         # 记录上一轮标记数据，用于"调整"时增量同步
         self._prev_marked: dict = {}
@@ -70,6 +71,8 @@ class WorkSpace(QWidget):
                              "front": self.front_panel.get_marked_teeth_data()}
         self.front_panel.enter_adjust()
         self.base_panel.enter_adjust()
+        # 进入调整面板后刷新撤销基线（此时的状态就是“改动前”）
+        self._last_state = self._capture_state()
 
     def enter_adjust_with(self, base_teeth: List[ToothData], front_teeth: List[ToothData]):
         self.base_panel.adjust_panel.set_teeth(base_teeth)
@@ -135,44 +138,90 @@ class WorkSpace(QWidget):
     def get_sym_axis(self):
         return self.front_panel.get_sym_axis()
 
-    # ---------- 撤销/重做（标记牙位快照） ----------
-    def _snapshot(self):
-        self._undo_stack.append({"base": [t.to_dict() for t in self.base_panel.get_marked_teeth_data()],
-                                 "front": [t.to_dict() for t in self.front_panel.get_marked_teeth_data()]})
-        if len(self._undo_stack) > 50:
-            self._undo_stack.pop(0)
+    # ---------- 撤销/重做（标记 + 调整 + 亮度黄度 统一快照） ----------
+    def _capture_state(self) -> dict:
+        """抓取当前两视图的完整可撤销状态"""
+        def one(panel) -> dict:
+            ap = panel.adjust_panel
+            return {
+                "marked": [t.to_dict() for t in panel.get_marked_teeth_data()],
+                "adjusted": [t.to_dict() for t in panel.get_adjusted_teeth_data()],
+                "bright": ap.bright,
+                "yellow": ap.yellow,
+                "mode": ap.mode,
+            }
+        return {"base": one(self.base_panel), "front": one(self.front_panel)}
+
+    def _apply_state(self, state: dict):
+        for panel, key in ((self.base_panel, "base"), (self.front_panel, "front")):
+            snap = state.get(key, {})
+            panel.set_marked_teeth([ToothData.from_dict(d) for d in snap.get("marked", [])])
+            panel.set_adjusted_teeth([ToothData.from_dict(d) for d in snap.get("adjusted", [])])
+            ap = panel.adjust_panel
+            ap.set_bright_yellow(int(snap.get("bright", 0)), int(snap.get("yellow", 0)))
+            if snap.get("mode") is not None:
+                ap.set_mode(int(snap.get("mode")))
+        self._prev_marked = {"base": self.base_panel.get_marked_teeth_data(),
+                             "front": self.front_panel.get_marked_teeth_data()}
+        self._last_state = self._capture_state()
+
+    def _push_prev_state(self):
+        """把「上一步的状态」压入撤销栈（调用时机：一次改动完成之后）"""
+        if self._last_state is not None:
+            self._undo_stack.append(self._last_state)
+            if len(self._undo_stack) > 60:
+                self._undo_stack.pop(0)
+            self._redo_stack.clear()
+        self._last_state = self._capture_state()
+
+    def reset_history(self):
+        """工程载入/新建后清空历史，避免撤销跳回上一个工程的内容"""
+        self._undo_stack.clear()
         self._redo_stack.clear()
+        self._last_state = self._capture_state()
 
     def _mark_changed(self):
-        """标记面板变化回调：立即记录一次撤销快照"""
-        self._snapshot()
+        """标记面板变化回调"""
+        self._push_prev_state()
+
+    def mark_changed(self):
+        """调整/唇线等面板变化回调（供 main_window 接线）"""
+        self._push_prev_state()
 
     def record_mark_snapshot(self):
-        """供外部（如 AI 检测自动标记后）手动记录快照"""
-        self._snapshot()
+        """供外部（AI 检测自动标记、镜像复制等）调用：把当前状态记为一步"""
+        self._push_prev_state()
+
+    def record_state_snapshot(self):
+        self._push_prev_state()
 
     def flush_snapshot(self):
         pass
 
+    def can_undo(self) -> bool:
+        return bool(self._undo_stack)
+
+    def can_redo(self) -> bool:
+        return bool(self._redo_stack)
+
     def undo(self):
         if not self._undo_stack:
-            return
-        cur = {"base": [t.to_dict() for t in self.base_panel.get_marked_teeth_data()],
-               "front": [t.to_dict() for t in self.front_panel.get_marked_teeth_data()]}
-        snap = self._undo_stack.pop()
-        self._redo_stack.append(cur)
-        self._apply_mark_snapshot(snap)
+            return False
+        self._redo_stack.append(self._capture_state())
+        state = self._undo_stack.pop()
+        self._apply_state(state)
+        return True
 
     def redo(self):
         if not self._redo_stack:
-            return
-        cur = {"base": [t.to_dict() for t in self.base_panel.get_marked_teeth_data()],
-               "front": [t.to_dict() for t in self.front_panel.get_marked_teeth_data()]}
-        snap = self._redo_stack.pop()
-        self._undo_stack.append(cur)
-        self._apply_mark_snapshot(snap)
+            return False
+        self._undo_stack.append(self._capture_state())
+        state = self._redo_stack.pop()
+        self._apply_state(state)
+        return True
 
     def _apply_mark_snapshot(self, snap: dict):
+        """兼容旧接口：只应用标记部分"""
         self.base_panel.set_marked_teeth([ToothData.from_dict(d) for d in snap.get("base", [])])
         self.front_panel.set_marked_teeth([ToothData.from_dict(d) for d in snap.get("front", [])])
 
@@ -191,12 +240,14 @@ class WorkSpace(QWidget):
             h, w = img.shape[:2] if img is not None else (1000, 1000)
             out = align_front(front, w, h)
             self.front_panel.adjust_panel.set_teeth([t.to_data() for t in out])
+        self.mark_changed()     # 自动优化同样可撤销
 
     def re_gen_adjust(self):
         """重新设计：清除调整面板，按当前标记重建"""
         self.base_panel.adjust_panel.clear()
         self.front_panel.adjust_panel.clear()
         self.enter_adjust()
+        self.mark_changed()
 
     # ---------- 缩放联动（平行合平面） ----------
     def sync_zoom(self, src_panel, dst_panel):
