@@ -416,6 +416,70 @@ def _anatomy_boxes(sboxes, sites, band_h):
     return out
 
 
+def _split_with_edges(energy: np.ndarray, xx1: int, xx2: int, n: int, ratios):
+    """解剖宽比打底，内部边界吸附到「竖直边缘能量」的局部最大值（牙间接触点）。
+
+    比按掩膜覆盖率找谷稳：真实照片里牙缝有时比牙龈亮、有时更暗，
+    但两牙接触处一定有较强竖直边缘。吸附幅度 ±0.25 段宽，并做比例约束。
+    """
+    bounds = _ratio_bounds(xx1, xx2, ratios)
+    seg = (xx2 - xx1) / float(n)
+    exp_w = [bounds[i + 1] - bounds[i] for i in range(n)]
+    out = [int(round(bounds[0]))]
+    for i in range(1, n):
+        b = bounds[i]
+        lo = int(max(out[-1] + max(3, exp_w[i - 1] * 0.60), b - seg * 0.25))
+        hi = int(min(xx2 - 3, b + seg * 0.25))
+        chosen = int(round(b))
+        if hi > lo and energy.size > hi:
+            win = energy[lo:hi + 1]
+            if win.size:
+                chosen = lo + int(np.argmax(win))
+        min_w = max(3, int(exp_w[i - 1] * 0.60))
+        max_w = max(min_w + 1, int(exp_w[i - 1] * 1.50))
+        w = chosen - out[-1]
+        if w < min_w:
+            chosen = out[-1] + min_w
+        elif w > max_w:
+            chosen = out[-1] + max_w
+        out.append(int(min(chosen, xx2 - 1)))
+    out.append(int(round(bounds[-1])))
+    for i in range(1, len(out)):
+        if out[i] <= out[i - 1]:
+            out[i] = out[i - 1] + 1
+    # 收尾归一：段宽偏离期望值限幅到 [0.75, 1.30]，再拉回总跨度（避免末段被拉宽）
+    raw = np.array([out[i + 1] - out[i] for i in range(n)], float)
+    exp = np.array(exp_w, float)
+    if raw.size == n and raw.min() > 0:
+        ratio = np.clip(raw / np.maximum(exp, 1e-6), 0.75, 1.30)
+        w = exp * ratio
+        w = w * ((xx2 - xx1) / w.sum())
+        cum = np.concatenate([[xx1], xx1 + np.cumsum(w)])
+        out = [int(round(v)) for v in cum]
+        for i in range(1, len(out)):
+            if out[i] <= out[i - 1]:
+                out[i] = out[i - 1] + 1
+        out[0], out[-1] = int(xx1), int(xx2)
+    return out
+
+
+def _uniform_rows(mask: np.ndarray, yy1: int, yy2: int, bx1: int, bx2: int,
+                  frac: float = 0.10):
+    """六颗牙共用的上下缘：整段牙列上掩膜覆盖率超过 frac 的行（冠高一致便于微调）"""
+    seg = mask[max(0, yy1):yy2 + 1, max(0, bx1):max(1, bx2)]
+    if seg.size == 0:
+        return yy1, yy2
+    rowfrac = seg.mean(axis=1) / 255.0
+    rows = np.where(rowfrac > frac)[0]
+    if rows.size < 3:
+        return yy1, yy2
+    r0, r1 = int(rows[0]), int(rows[-1])
+    # 切缘下方常带阴影，向下多留 6% 高度，避免框短于牙冠
+    pad = max(2, int((r1 - r0) * 0.06))
+    base = max(0, yy1)
+    return base + r0, min(mask.shape[0] - 1, base + r1 + pad)
+
+
 def _teeth_detect_core(roi: np.ndarray, sites=(13, 12, 11, 21, 22, 23),
                        require_upper: bool = False):
     """ROI 内牙齿检测核心，返回 [(site, x1,y1,x2,y2)]（ROI 局部坐标）。
@@ -434,18 +498,17 @@ def _teeth_detect_core(roi: np.ndarray, sites=(13, 12, 11, 21, 22, 23),
     bh = yy2 - yy1
     yy1e = max(0, yy1 - int(bh * 0.35))
     yy2e = min(rh - 1, yy2 + int(bh * 0.45))
-    gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
-    boxes = _split_tooth_boxes(mask, xx1, xx2, len(sites))
-    if len(boxes) < len(sites):
-        bb = _ratio_bounds(xx1, xx2, FRONT_TOOTH_RATIOS[:len(sites)])
-        boxes = [(bb[i], float(yy1e), bb[i + 1], float(yy2e)) for i in range(len(sites))]
-    sboxes = []
-    for i, b in enumerate(boxes):
-        if i >= len(sites):
-            break
-        y1, y2 = _seg_y_by_gray(gray, yy1e, yy2e, int(round(b[0])), int(round(b[2])))
-        sboxes.append((sites[i], b[0], float(y1), b[2], float(y2)))
-    return _anatomy_boxes(sboxes, sites, float(yy2e - yy1e))
+    gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    # 分牙：解剖宽比打底 + 竖直边缘吸附（牙间接触点）+ 段宽比例约束
+    sy = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+    energy = sy[yy1:yy2 + 1].mean(axis=0)
+    energy = np.convolve(energy, np.ones(3) / 3.0, mode="same")
+    bounds = _split_with_edges(energy, xx1, xx2, len(sites), FRONT_TOOTH_RATIOS[:len(sites)])
+    # 六颗牙共用冠高（原来每颗牙各用灰度窗，高度参差不齐、还容易吃进牙龈）
+    by1, by2 = _uniform_rows(mask, yy1e, yy2e, xx1, xx2)
+    sboxes = [(sites[i], float(bounds[i]), float(by1), float(bounds[i + 1]), float(by2))
+              for i in range(len(sites)) if bounds[i + 1] - bounds[i] >= 3]
+    return sboxes
 
 
 def _try_rois(small, gray, rois, sites, require_upper=True):
@@ -466,6 +529,28 @@ def _try_rois(small, gray, rois, sites, require_upper=True):
         if boxes:
             return roi, boxes
     return None, []
+
+
+def _clamp_boxes(boxes, iw: int, ih: int, max_w_ratio: float = 0.40, max_h_ratio: float = 0.16):
+    """把 6 个框的整体尺寸限制到人体可行范围，避免「整张脸一个大框」。
+
+    正面照最常见的失败：亮度带把整张脸当成牙列，框宽能到脸宽的两倍。
+    这里以「切缘（框底部）+ 牙列水平中心」为基准等比缩小，只改大小不改位置。
+    """
+    if not boxes:
+        return boxes
+    xs1 = min(b[1] for b in boxes); xs2 = max(b[3] for b in boxes)
+    ys1 = min(b[2] for b in boxes); ys2 = max(b[4] for b in boxes)
+    w, h = xs2 - xs1, ys2 - ys1
+    max_w, max_h = iw * max_w_ratio, ih * max_h_ratio
+    if w <= max_w and h <= max_h:
+        return boxes
+    scale = min(max_w / w if w > 0 else 1.0, max_h / h if h > 0 else 1.0)
+    cx, bottom = (xs1 + xs2) / 2.0, ys2
+    nx1, ny1 = cx - w * scale / 2.0, bottom - h * scale
+    fx = lambda x: nx1 + (x - xs1) * scale
+    fy = lambda y: ny1 + (y - ys1) * scale
+    return [(s, fx(x1), fy(y1), fx(x2), fy(y2)) for s, x1, y1, x2, y2 in boxes]
 
 
 def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
@@ -489,11 +574,14 @@ def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
         return []
     rx1, ry1, rx2, ry2 = roi
     if scale == 1.0:
-        return [(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2) for s, x1, y1, x2, y2 in boxes]
+        return _clamp_boxes([(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2)
+                             for s, x1, y1, x2, y2 in boxes], w, h)
     # 坐标换算回原图
     inv = 1.0 / scale
-    return [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
-             int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
+    out = [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
+            int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
+    oh, ow = image.shape[:2]
+    return _clamp_boxes(out, ow, oh)
 
 
 def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
@@ -515,7 +603,10 @@ def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
         return []
     rx1, ry1, rx2, ry2 = roi
     if scale == 1.0:
-        return [(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2) for s, x1, y1, x2, y2 in boxes]
+        return _clamp_boxes([(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2)
+                             for s, x1, y1, x2, y2 in boxes], w, h)
     inv = 1.0 / scale
-    return [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
-             int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
+    out = [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
+            int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
+    oh, ow = image.shape[:2]
+    return _clamp_boxes(out, ow, oh)
