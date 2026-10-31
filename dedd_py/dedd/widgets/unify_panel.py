@@ -138,15 +138,23 @@ class UnifyPanel(QWidget):
         painter.setPen(Qt.NoPen)
         for p in self.points:
             painter.drawEllipse(p, PT_RADIUS, PT_RADIUS)
-        painter.setPen(QColor(200, 240, 255))
+        if len(self.points) == 0:
+            hint = "沿咬合平面点第 1 点（如牙列左侧）"
+        elif len(self.points) == 1:
+            hint = "沿咬合平面点第 2 点（如牙列右侧），然后点『应用旋转』"
+        else:
+            hint = "两点已确定：点『应用旋转』将合平面转水平；右键可删点"
+        from PySide6.QtCore import QRectF
         from PySide6.QtGui import QFont
         f = QFont()
         f.setPointSize(10)
         painter.setFont(f)
-        if len(self.points) == 0:
-            painter.drawText(10, 22, "沿咬合平面点第 1 点（如牙列左侧）")
-        elif len(self.points) == 1:
-            painter.drawText(10, 22, "沿咬合平面点第 2 点（如牙列右侧），然后点『应用旋转』")
-        else:
-            painter.drawText(10, 22, "两点已确定：点『应用旋转』将合平面转水平；右键可删点")
+        fm = painter.fontMetrics()
+        tw = fm.horizontalAdvance(hint)
+        box = QRectF(8, 8, tw + 16, fm.height() + 8)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 140))      # 半透明底，避免压在照片上看不清
+        painter.drawRoundedRect(box, 4, 4)
+        painter.setPen(QColor(210, 245, 255))
+        painter.drawText(box.adjusted(8, 0, 0, 0), Qt.AlignVCenter, hint)
         painter.end()

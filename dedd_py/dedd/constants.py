@@ -3,7 +3,7 @@
 
 APP_NAME = "数字化美学牙科分析与设计"
 APP_NAME_EN = "Digital Esthetic Dentistry Design System (Python)"
-VERSION = "v1.6"
+VERSION = "v1.7"
 
 PROJ_FILE_SUFFIX = "deddp"          # 本程序的项目文件后缀
 DEPX_SUFFIX = "depx"                # 原 Java 版项目文件后缀（可导入）

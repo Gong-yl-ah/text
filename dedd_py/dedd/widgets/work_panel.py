@@ -131,6 +131,10 @@ class WorkPanel(QWidget):
             w.setGeometry(g)
         self.button_bar.setGeometry(0, self.height() - 34, self.width(), 34)
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._relayout_overlays()      # 首次显示时对齐覆盖层，避免提示文字压到标题条
+
     def _rotate(self, direction: str):
         img = self.image_view.get_image()
         if img is None:
@@ -365,7 +369,10 @@ class WorkPanel(QWidget):
                 if w.isVisible():
                     w.render(p, QPoint(0, 0))
         p.end()
-        img = pm.toImage()
+        from PySide6.QtGui import QImage
+        # QPixmap.toImage() 默认是 Format_RGB32（内存里是 BGRA），
+        # 直接按 RGBA 读会把红蓝互换（照片变蓝、检测也偏），这里统一转 RGB888
+        img = pm.toImage().convertToFormat(QImage.Format_RGB888)
         arr = qimage_bytes_to_rgba(img)
         rect = self.image_view.draw_rect()
         if rect.width() <= 1 or rect.height() <= 1:

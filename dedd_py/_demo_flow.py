@@ -41,11 +41,12 @@ shot("step01_编辑照片.png")
 w.tabs.setCurrentIndex(1)
 app.processEvents()
 bp = w.workspace.base_panel
-# 模拟沿合平面点两点（视图坐标，口内图 548x822 显示于视口）
-wpx = bp.image_view.width()
-hp = bp.image_view.height()
-bp.unify_panel.points = [QPointF(wpx * 0.30, hp * 0.62), QPointF(wpx * 0.70, hp * 0.50)]
-bp.unify_panel.img_points = [bp.unify_panel._to_img(p) for p in bp.unify_panel.points]
+# 沿「切缘连线」点两点（图像坐标 → 视图坐标），演示把合平面转水平
+_img = bp.get_image()
+iw_px, ih_px = _img.width(), _img.height()
+img_pts = [QPointF(iw_px * 0.360, ih_px * 0.640), QPointF(iw_px * 0.700, ih_px * 0.628)]
+bp.unify_panel.img_points = img_pts
+bp.unify_panel.points = [bp.image_view.to_view(p.x(), p.y()) for p in img_pts]
 shot("step02_平行合平面_两点.png")
 bp.apply_unify_rotation()
 app.processEvents()

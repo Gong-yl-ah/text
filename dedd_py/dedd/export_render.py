@@ -21,7 +21,7 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .image_utils import adjust_bright_yellow, qimage_bytes_to_rgba
+from .image_utils import adjust_bright_yellow, qimage_to_np
 from .teeth_templates import get_template
 from .widgets.adjust_panel import MODE_NONE, MODE_REAL
 
@@ -57,7 +57,9 @@ def view_before(panel) -> Optional[np.ndarray]:
     img = panel.get_image()
     if img is None or img.isNull():
         return None
-    arr = qimage_bytes_to_rgba(img)
+    arr = qimage_to_np(img)
+    if arr is None:
+        return None
     return np.ascontiguousarray(arr[:, :, :3])
 
 
@@ -77,7 +79,7 @@ def view_after(panel) -> Optional[np.ndarray]:
         tpl = get_template(it.site, kind)
         if tpl is None:
             continue
-        tpl_arr = qimage_bytes_to_rgba(tpl)
+        tpl_arr = qimage_to_np(tpl)
         if tpl_arr is None or tpl_arr.size == 0:
             continue
         rgb = tpl_arr[:, :, :3]
