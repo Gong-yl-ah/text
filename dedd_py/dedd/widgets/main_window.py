@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QDialog, QFileDialog, QLabel, QMainWindow,
                                QToolBar, QVBoxLayout, QWidget)
 
 from .. import constants as C
-from ..image_utils import crop, np_to_qimage, qimage_bytes
+from ..image_utils import crop, np_to_qimage, qimage_bytes, qimage_bytes_to_rgba
 from ..models import BasicInfo, ProjData, ToothData, mirror_teeth
 from ..project_io import import_depx, load_project, save_project
 from .new_project_dialog import NewProjectDialog
@@ -646,7 +646,10 @@ class MainWindow(QMainWindow):
         # 口内视图
         bp = self.workspace.base_panel
         if bp.has_image():
-            boxes = detect_teeth_intraoral(bp.render_pre_np())
+            # 必须用原始图像分辨率做检测：render_pre_np() 是「窗口大小」的渲染结果，
+            # 用它检测再按图像坐标画框会整体错位（实测框飘到眼睛/额头）
+            boxes = detect_teeth_intraoral(np.ascontiguousarray(
+                qimage_bytes_to_rgba(bp.get_image())[:, :, :3]))
             if boxes:
                 bp.set_marked_teeth([ToothData(site=s, x1=a, y1=b, x2=c, y2=d, length=0)
                                      for s, a, b, c, d in boxes])
@@ -655,7 +658,8 @@ class MainWindow(QMainWindow):
         # 正面视图
         fp = self.workspace.front_panel
         if fp.has_image():
-            boxes = detect_teeth_front(fp.render_pre_np())
+            boxes = detect_teeth_front(np.ascontiguousarray(
+                qimage_bytes_to_rgba(fp.get_image())[:, :, :3]))
             if boxes:
                 fp.set_marked_teeth([ToothData(site=s, x1=a, y1=b, x2=c, y2=d, length=0)
                                      for s, a, b, c, d in boxes])

@@ -506,6 +506,14 @@ def _teeth_detect_core(roi: np.ndarray, sites=(13, 12, 11, 21, 22, 23),
     bounds = _split_with_edges(energy, xx1, xx2, len(sites), FRONT_TOOTH_RATIOS[:len(sites)])
     # 六颗牙共用冠高（原来每颗牙各用灰度窗，高度参差不齐、还容易吃进牙龈）
     by1, by2 = _uniform_rows(mask, yy1e, yy2e, xx1, xx2)
+    # 冠高还要与牙宽相符（冠高 ≈ 牙宽 / 0.75~0.9）；掩膜常把唇/牙龈算进来导致框过高
+    mean_w = max(6.0, (xx2 - xx1) / float(len(sites)))
+    h_min, h_max = 0.85 * mean_w, 1.45 * mean_w
+    h_meas = by2 - by1
+    if h_meas > h_max or h_meas < h_min:
+        cy = (by1 + by2) / 2.0
+        hh = min(max(h_meas, h_min), h_max)
+        by1, by2 = cy - hh / 2.0, cy + hh / 2.0
     sboxes = [(sites[i], float(bounds[i]), float(by1), float(bounds[i + 1]), float(by2))
               for i in range(len(sites)) if bounds[i + 1] - bounds[i] >= 3]
     return sboxes
@@ -526,8 +534,14 @@ def _try_rois(small, gray, rois, sites, require_upper=True):
             continue
         sub = small[ry1:ry2, rx1:rx2]
         boxes = _teeth_detect_core(sub, sites, require_upper)
-        if boxes:
-            return roi, boxes
+        if not boxes:
+            continue
+        # 上前牙先验（全局坐标）：人像/口内照里牙列一定在图高的 42%~90% 之间，
+        # 落在这个区间外的多半是额头/眼睛亮带，直接弃用这个 ROI
+        band_cy = ry1 + (min(b[2] for b in boxes) + max(b[4] for b in boxes)) / 2.0
+        if not (ih * 0.42 <= band_cy <= ih * 0.90):
+            continue
+        return roi, boxes
     return None, []
 
 
@@ -584,6 +598,18 @@ def detect_teeth_intraoral(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
     return _clamp_boxes(out, ow, oh)
 
 
+def _face_box(gray: np.ndarray):
+    """原始人脸框（Haar，x,y,w,h）；没有则 None"""
+    import cv2
+    h, w = gray.shape
+    face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    fs = face.detectMultiScale(gray, 1.1, 5,
+                              minSize=(max(40, int(w * 0.12)), max(40, int(h * 0.12))))
+    if len(fs) == 0:
+        return None
+    return tuple(int(v) for v in max(fs, key=lambda s: s[2] * s[3]))
+
+
 def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
     """正面视图自动检测：返回 [(site, x1, y1, x2, y2), ...]（原图像坐标）
     嘴部定位（smile → 脸下1/3 → 下半中央）→ 双信号牙齿掩膜 → 行带分牙。"""
@@ -603,10 +629,19 @@ def detect_teeth_front(image: np.ndarray, sites=(13, 12, 11, 21, 22, 23)):
         return []
     rx1, ry1, rx2, ry2 = roi
     if scale == 1.0:
-        return _clamp_boxes([(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2)
-                             for s, x1, y1, x2, y2 in boxes], w, h)
-    inv = 1.0 / scale
-    out = [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
-            int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
-    oh, ow = image.shape[:2]
-    return _clamp_boxes(out, ow, oh)
+        out = _clamp_boxes([(s, rx1 + x1, ry1 + y1, rx1 + x2, ry1 + y2)
+                            for s, x1, y1, x2, y2 in boxes], w, h)
+    else:
+        inv = 1.0 / scale
+        out = [(s, int((rx1 + x1) * inv), int((ry1 + y1) * inv),
+                int((rx1 + x2) * inv), int((ry1 + y2) * inv)) for s, x1, y1, x2, y2 in boxes]
+        oh, ow = image.shape[:2]
+        out = _clamp_boxes(out, ow, oh)
+    # 正面照常见偏差：整组框整体偏高/偏低。用 Haar 人脸框把「切缘」对齐到笑线（脸高 80%）
+    fb = _face_box(gray)
+    if fb:
+        _fx, fy, _fw, fh = fb
+        shift = (fy + 0.90 * fh) / scale - max(b[4] for b in out)
+        if abs(shift) <= 0.30 * fh / scale:
+            out = [(s, x1, y1 + shift, x2, y2 + shift) for s, x1, y1, x2, y2 in out]
+    return out
